@@ -3898,3 +3898,627 @@ ensureLoggingTable()
       error.message
     );
   });
+
+// ============================================================
+// PART 11 — ADMIN ACTIVITY + INVITE TRACKING
+// ============================================================
+
+async function ensureActivityTables() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS member_activity (
+        guild_id VARCHAR(30) NOT NULL,
+        user_id VARCHAR(30) NOT NULL,
+        messages INTEGER DEFAULT 0,
+        commands INTEGER DEFAULT 0,
+        voice_minutes INTEGER DEFAULT 0,
+        last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (guild_id, user_id)
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS invite_stats (
+        guild_id VARCHAR(30) NOT NULL,
+        user_id VARCHAR(30) NOT NULL,
+        invites INTEGER DEFAULT 0,
+        fake_invites INTEGER DEFAULT 0,
+        left_members INTEGER DEFAULT 0,
+        PRIMARY KEY (guild_id, user_id)
+      )
+    `);
+
+    console.log("✅ Part 11 database initialized.");
+  } catch (error) {
+    console.error("❌ Part 11 database error:", error.message);
+  }
+}
+
+
+// ============================================================
+// ACTIVITY TRACKING
+// ============================================================
+
+async function recordActivity(guildId, userId, type) {
+  try {
+    await pool.query(
+      `
+      INSERT INTO member_activity
+        (guild_id, user_id, messages, commands, voice_minutes)
+      VALUES
+        ($1, $2, $3, $4, $5)
+      ON CONFLICT (guild_id, user_id)
+      DO UPDATE SET
+        messages = member_activity.messages + EXCLUDED.messages,
+        commands = member_activity.commands + EXCLUDED.commands,
+        voice_minutes =
+          member_activity.voice_minutes + EXCLUDED.voice_minutes,
+        last_activity = CURRENT_TIMESTAMP
+      `,
+      [
+        guildId,
+        userId,
+        type === "message" ? 1 : 0,
+        type === "command" ? 1 : 0,
+        type === "voice" ? 1 : 0
+      ]
+    );
+  } catch (error) {
+    console.error("❌ Activity tracking error:", error.message);
+  }
+}
+
+
+// ============================================================
+// MESSAGE ACTIVITY
+// ============================================================
+
+client.on("messageCreate", async (message) => {
+  try {
+    if (!message.guild || message.author.bot) return;
+
+    await recordActivity(
+      message.guild.id,
+      message.author.id,
+      "message"
+    );
+  } catch (error) {
+    console.error("❌ Message activity error:", error.message);
+  }
+});
+
+
+// ============================================================
+// COMMAND ACTIVITY
+// ============================================================
+
+client.on("interactionCreate", async (interaction) => {
+  try {
+    if (!interaction.guild) return;
+    if (!interaction.isChatInputCommand()) return;
+    if (interaction.user.bot) return;
+
+    await recordActivity(
+      interaction.guild.id,
+      interaction.user.id,
+      "command"
+    );
+  } catch (error) {
+    console.error("❌ Command activity error:", error.message);
+  }
+});
+
+
+// ============================================================
+// VOICE ACTIVITY
+// ============================================================
+
+const voiceJoinTimes = new Map();
+
+client.on("voiceStateUpdate", async (oldState, newState) => {
+  try {
+    const userId = newState.id;
+    const guildId = newState.guild.id;
+
+    // Joined voice
+    if (!oldState.channelId && newState.channelId) {
+      voiceJoinTimes.set(
+        `${guildId}:${userId}`,
+        Date.now()
+      );
+      return;
+    }
+
+    // Left voice
+    if (oldState.channelId && !newState.channelId) {
+      const key = `${guildId}:${userId}`;
+      const joinedAt = voiceJoinTimes.get(key);
+
+      if (!joinedAt) return;
+
+      const minutes = Math.max(
+        1,
+        Math.floor(
+          (Date.now() - joinedAt) / 60000
+        )
+      );
+
+      voiceJoinTimes.delete(key);
+
+      for (let i = 0; i < minutes; i++) {
+        await recordActivity(
+          guildId,
+          userId,
+          "voice"
+        );
+      }
+    }
+  } catch (error) {
+    console.error("❌ Voice activity error:", error.message);
+  }
+});
+
+
+// ============================================================
+// /ACTIVITY
+// ============================================================
+
+async function handleActivity(interaction) {
+  const user =
+    interaction.options.getUser("user") ||
+    interaction.user;
+
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM member_activity
+    WHERE guild_id = $1
+      AND user_id = $2
+    `,
+    [
+      interaction.guild.id,
+      user.id
+    ]
+  );
+
+  const data = result.rows[0];
+
+  if (!data) {
+    return interaction.reply({
+      content: `📊 No activity recorded for **${user.tag}** yet.`,
+      ephemeral: true
+    });
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle("📊 Member Activity")
+    .setDescription(`${user}`)
+    .addFields(
+      {
+        name: "💬 Messages",
+        value: String(data.messages),
+        inline: true
+      },
+      {
+        name: "⚙️ Commands",
+        value: String(data.commands),
+        inline: true
+      },
+      {
+        name: "🎙️ Voice Minutes",
+        value: String(data.voice_minutes),
+        inline: true
+      },
+      {
+        name: "🕐 Last Activity",
+        value: `<t:${Math.floor(
+          new Date(data.last_activity).getTime() / 1000
+        )}:R>`,
+        inline: false
+      }
+    )
+    .setTimestamp();
+
+  return interaction.reply({
+    embeds: [embed],
+    ephemeral: true
+  });
+}
+
+
+// ============================================================
+// /ADMINACTIVITY
+// ============================================================
+
+async function handleAdminActivity(interaction) {
+  if (!interaction.memberPermissions?.has("ManageGuild")) {
+    return interaction.reply({
+      content: "❌ You need **Manage Server** permission.",
+      ephemeral: true
+    });
+  }
+
+  const result = await pool.query(`
+    SELECT
+      user_id,
+      messages,
+      commands,
+      voice_minutes,
+      last_activity
+    FROM member_activity
+    WHERE guild_id = $1
+    ORDER BY
+      messages DESC,
+      commands DESC,
+      voice_minutes DESC
+    LIMIT 20
+  `, [interaction.guild.id]);
+
+  if (!result.rows.length) {
+    return interaction.reply({
+      content: "📊 No activity data available yet.",
+      ephemeral: true
+    });
+  }
+
+  const lines = [];
+
+  for (let i = 0; i < result.rows.length; i++) {
+    const row = result.rows[i];
+
+    const member =
+      interaction.guild.members.cache.get(row.user_id);
+
+    if (!member) continue;
+
+    lines.push(
+      `**${i + 1}. ${member.user.tag}**\n` +
+      `💬 ${row.messages} messages • ` +
+      `⚙️ ${row.commands} commands • ` +
+      `🎙️ ${row.voice_minutes} min`
+    );
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle("👑 Admin Activity")
+    .setDescription(
+      lines.length
+        ? lines.join("\n\n")
+        : "No current members found."
+    )
+    .setTimestamp();
+
+  return interaction.reply({
+    embeds: [embed],
+    ephemeral: true
+  });
+}
+
+
+// ============================================================
+// /LEADERBOARD
+// ============================================================
+
+async function handleLeaderboard(interaction) {
+  const result = await pool.query(`
+    SELECT
+      user_id,
+      messages,
+      commands,
+      voice_minutes
+    FROM member_activity
+    WHERE guild_id = $1
+    ORDER BY
+      (messages + commands + voice_minutes) DESC
+    LIMIT 10
+  `, [interaction.guild.id]);
+
+  if (!result.rows.length) {
+    return interaction.reply({
+      content: "🏆 No activity data available yet.",
+      ephemeral: true
+    });
+  }
+
+  const lines = [];
+
+  for (let i = 0; i < result.rows.length; i++) {
+    const row = result.rows[i];
+
+    const member =
+      interaction.guild.members.cache.get(row.user_id);
+
+    if (!member) continue;
+
+    const score =
+      Number(row.messages) +
+      Number(row.commands) +
+      Number(row.voice_minutes);
+
+    lines.push(
+      `**${i + 1}. ${member.user.tag}** — ${score} points`
+    );
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle("🏆 Activity Leaderboard")
+    .setDescription(
+      lines.length
+        ? lines.join("\n")
+        : "No current members found."
+    )
+    .setTimestamp();
+
+  return interaction.reply({
+    embeds: [embed]
+  });
+}
+
+
+// ============================================================
+// INVITE CACHE
+// ============================================================
+
+const inviteCache = new Map();
+
+async function cacheGuildInvites(guild) {
+  try {
+    const invites = await guild.invites.fetch();
+
+    const data = new Map();
+
+    invites.forEach(invite => {
+      data.set(invite.code, invite.uses || 0);
+    });
+
+    inviteCache.set(guild.id, data);
+  } catch (error) {
+    console.error(
+      `❌ Could not cache invites for ${guild.name}:`,
+      error.message
+    );
+  }
+}
+
+
+// ============================================================
+// READY — CACHE INVITES
+// ============================================================
+
+client.once("ready", async () => {
+  try {
+    for (const guild of client.guilds.cache.values()) {
+      await cacheGuildInvites(guild);
+    }
+
+    console.log("✅ Invite tracking initialized.");
+  } catch (error) {
+    console.error("❌ Invite cache error:", error.message);
+  }
+});
+
+
+// ============================================================
+// MEMBER JOIN — DETECT INVITER
+// ============================================================
+
+client.on("guildMemberAdd", async (member) => {
+  try {
+    const oldInvites =
+      inviteCache.get(member.guild.id) ||
+      new Map();
+
+    const newInvites =
+      await member.guild.invites.fetch();
+
+    let usedInvite = null;
+
+    newInvites.forEach(invite => {
+      const oldUses =
+        oldInvites.get(invite.code) || 0;
+
+      if ((invite.uses || 0) > oldUses) {
+        usedInvite = invite;
+      }
+    });
+
+    const updatedCache = new Map();
+
+    newInvites.forEach(invite => {
+      updatedCache.set(
+        invite.code,
+        invite.uses || 0
+      );
+    });
+
+    inviteCache.set(
+      member.guild.id,
+      updatedCache
+    );
+
+    if (!usedInvite?.inviter) return;
+
+    const inviterId = usedInvite.inviter.id;
+
+    await pool.query(
+      `
+      INSERT INTO invite_stats
+        (guild_id, user_id, invites)
+      VALUES
+        ($1, $2, 1)
+      ON CONFLICT (guild_id, user_id)
+      DO UPDATE SET
+        invites = invite_stats.invites + 1
+      `,
+      [
+        member.guild.id,
+        inviterId
+      ]
+    );
+
+  } catch (error) {
+    console.error("❌ Invite tracking error:", error.message);
+  }
+});
+
+
+// ============================================================
+// /INVITES
+// ============================================================
+
+async function handleInvites(interaction) {
+  const user =
+    interaction.options.getUser("user") ||
+    interaction.user;
+
+  const result = await pool.query(
+    `
+    SELECT *
+    FROM invite_stats
+    WHERE guild_id = $1
+      AND user_id = $2
+    `,
+    [
+      interaction.guild.id,
+      user.id
+    ]
+  );
+
+  const data = result.rows[0];
+
+  const invites = data?.invites || 0;
+  const fake = data?.fake_invites || 0;
+  const left = data?.left_members || 0;
+
+  const embed = new EmbedBuilder()
+    .setTitle("📨 Invite Statistics")
+    .setDescription(`${user}`)
+    .addFields(
+      {
+        name: "✅ Invites",
+        value: String(invites),
+        inline: true
+      },
+      {
+        name: "⚠️ Fake",
+        value: String(fake),
+        inline: true
+      },
+      {
+        name: "📤 Left",
+        value: String(left),
+        inline: true
+      }
+    )
+    .setTimestamp();
+
+  return interaction.reply({
+    embeds: [embed]
+  });
+}
+
+
+// ============================================================
+// /INVITELEADERBOARD
+// ============================================================
+
+async function handleInviteLeaderboard(interaction) {
+  const result = await pool.query(
+    `
+    SELECT user_id, invites
+    FROM invite_stats
+    WHERE guild_id = $1
+    ORDER BY invites DESC
+    LIMIT 10
+    `,
+    [interaction.guild.id]
+  );
+
+  if (!result.rows.length) {
+    return interaction.reply({
+      content: "📨 No invite data available yet.",
+      ephemeral: true
+    });
+  }
+
+  const lines = [];
+
+  for (let i = 0; i < result.rows.length; i++) {
+    const row = result.rows[i];
+
+    const member =
+      interaction.guild.members.cache.get(row.user_id);
+
+    if (!member) continue;
+
+    lines.push(
+      `**${i + 1}. ${member.user.tag}** — ` +
+      `**${row.invites}** invites`
+    );
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle("🏆 Invite Leaderboard")
+    .setDescription(
+      lines.length
+        ? lines.join("\n")
+        : "No current members found."
+    )
+    .setTimestamp();
+
+  return interaction.reply({
+    embeds: [embed]
+  });
+}
+
+
+// ============================================================
+// PART 11 COMMAND ROUTER
+// ============================================================
+
+// Add these cases to your EXISTING command router.
+// Do NOT create another router.
+
+async function handlePart11Commands(interaction) {
+  switch (interaction.commandName) {
+
+    case "activity":
+      await handleActivity(interaction);
+      return true;
+
+    case "adminactivity":
+      await handleAdminActivity(interaction);
+      return true;
+
+    case "leaderboard":
+      await handleLeaderboard(interaction);
+      return true;
+
+    case "invites":
+      await handleInvites(interaction);
+      return true;
+
+    case "inviteleaderboard":
+      await handleInviteLeaderboard(interaction);
+      return true;
+
+    default:
+      return false;
+  }
+}
+
+
+// ============================================================
+// INITIALIZE PART 11
+// ============================================================
+
+ensureActivityTables()
+  .then(() => {
+    console.log("✅ Part 11 Activity system initialized.");
+  })
+  .catch(error => {
+    console.error(
+      "❌ Part 11 initialization failed:",
+      error.message
+    );
+  });
