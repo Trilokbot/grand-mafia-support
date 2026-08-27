@@ -1923,3 +1923,715 @@ if (commandName === "slowmode") {
       : `🐌 Slowmode set to **${seconds} seconds**.`
   );
 }
+
+// =========================
+// PART 7 — TICKET SYSTEM
+// =========================
+
+const {
+  ChannelType,
+  PermissionFlagsBits,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder
+} = require("discord.js");
+
+// Ticket category name
+const TICKET_CATEGORY = "TICKETS";
+
+// Support role name
+const SUPPORT_ROLE = "Support Team";
+
+// =========================
+// /ticket
+// =========================
+
+if (commandName === "ticket") {
+
+  const guild = interaction.guild;
+
+  // Check if user already has a ticket
+  const existingTicket = guild.channels.cache.find(
+    channel =>
+      channel.type === ChannelType.GuildText &&
+      channel.topic === `ticket-owner:${interaction.user.id}`
+  );
+
+  if (existingTicket) {
+    return interaction.reply({
+      content: `❌ You already have an open ticket: ${existingTicket}`,
+      ephemeral: true
+    });
+  }
+
+  // Find or create category
+  let category = guild.channels.cache.find(
+    channel =>
+      channel.type === ChannelType.GuildCategory &&
+      channel.name.toLowerCase() === TICKET_CATEGORY.toLowerCase()
+  );
+
+  if (!category) {
+    category = await guild.channels.create({
+      name: TICKET_CATEGORY,
+      type: ChannelType.GuildCategory
+    });
+  }
+
+  // Find support role
+  const supportRole = guild.roles.cache.find(
+    role =>
+      role.name.toLowerCase() === SUPPORT_ROLE.toLowerCase()
+  );
+
+  const permissionOverwrites = [
+    {
+      id: guild.id,
+      deny: [PermissionFlagsBits.ViewChannel]
+    },
+    {
+      id: interaction.user.id,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory
+      ]
+    },
+    {
+      id: guild.members.me.id,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.ManageChannels
+      ]
+    }
+  ];
+
+  if (supportRole) {
+    permissionOverwrites.push({
+      id: supportRole.id,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory
+      ]
+    });
+  }
+
+  const ticket = await guild.channels.create({
+    name: `ticket-${interaction.user.username}`
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "")
+      .slice(0, 90),
+
+    type: ChannelType.GuildText,
+
+    parent: category.id,
+
+    topic: `ticket-owner:${interaction.user.id}`,
+
+    permissionOverwrites
+  });
+
+  const closeButton = new ButtonBuilder()
+    .setCustomId("ticket_close")
+    .setLabel("Close Ticket")
+    .setEmoji("🔒")
+    .setStyle(ButtonStyle.Danger);
+
+  const claimButton = new ButtonBuilder()
+    .setCustomId("ticket_claim")
+    .setLabel("Claim")
+    .setEmoji("🎫")
+    .setStyle(ButtonStyle.Primary);
+
+  const row = new ActionRowBuilder()
+    .addComponents(closeButton, claimButton);
+
+  const embed = new EmbedBuilder()
+    .setTitle("🎫 Support Ticket")
+    .setDescription(
+      `Welcome <@${interaction.user.id}>!\n\n` +
+      `Please explain your issue clearly and wait for a member of the **Support Team**.\n\n` +
+      `🔒 Use **Close Ticket** when your issue has been resolved.\n` +
+      `🎫 Staff can use **Claim** to take responsibility for this ticket.`
+    )
+    .setColor(0x5865f2)
+    .setTimestamp();
+
+  await ticket.send({
+    content: supportRole
+      ? `${interaction.user} ${supportRole}`
+      : `${interaction.user}`,
+    embeds: [embed],
+    components: [row]
+  });
+
+  return interaction.reply({
+    content: `✅ Your ticket has been created: ${ticket}`,
+    ephemeral: true
+  });
+}
+
+
+// =========================
+// /close
+// =========================
+
+if (commandName === "close") {
+
+  const channel = interaction.channel;
+
+  if (
+    !channel ||
+    channel.type !== ChannelType.GuildText ||
+    !channel.topic?.startsWith("ticket-owner:")
+  ) {
+    return interaction.reply({
+      content: "❌ This command can only be used inside a ticket.",
+      ephemeral: true
+    });
+  }
+
+  const ownerId = channel.topic.split(":")[1];
+
+  const isOwner = interaction.user.id === ownerId;
+
+  const isStaff =
+    interaction.member.permissions.has(
+      PermissionFlagsBits.ManageChannels
+    );
+
+  if (!isOwner && !isStaff) {
+    return interaction.reply({
+      content: "❌ Only the ticket owner or staff can close this ticket.",
+      ephemeral: true
+    });
+  }
+
+  await interaction.reply("🔒 Ticket will be deleted in **5 seconds**.");
+
+  setTimeout(async () => {
+    await channel.delete("Ticket closed").catch(() => {});
+  }, 5000);
+
+  return;
+}
+
+
+// =========================
+// /add
+// =========================
+
+if (commandName === "add") {
+
+  const channel = interaction.channel;
+
+  if (
+    !channel ||
+    channel.type !== ChannelType.GuildText ||
+    !channel.topic?.startsWith("ticket-owner:")
+  ) {
+    return interaction.reply({
+      content: "❌ This command can only be used inside a ticket.",
+      ephemeral: true
+    });
+  }
+
+  if (
+    !interaction.member.permissions.has(
+      PermissionFlagsBits.ManageChannels
+    )
+  ) {
+    return interaction.reply({
+      content: "❌ You need **Manage Channels** permission.",
+      ephemeral: true
+    });
+  }
+
+  const user = interaction.options.getUser("user");
+
+  await channel.permissionOverwrites.edit(user.id, {
+    ViewChannel: true,
+    SendMessages: true,
+    ReadMessageHistory: true
+  });
+
+  return interaction.reply(
+    `✅ Added **${user.tag}** to the ticket.`
+  );
+}
+
+
+// =========================
+// /remove
+// =========================
+
+if (commandName === "remove") {
+
+  const channel = interaction.channel;
+
+  if (
+    !channel ||
+    channel.type !== ChannelType.GuildText ||
+    !channel.topic?.startsWith("ticket-owner:")
+  ) {
+    return interaction.reply({
+      content: "❌ This command can only be used inside a ticket.",
+      ephemeral: true
+    });
+  }
+
+  if (
+    !interaction.member.permissions.has(
+      PermissionFlagsBits.ManageChannels
+    )
+  ) {
+    return interaction.reply({
+      content: "❌ You need **Manage Channels** permission.",
+      ephemeral: true
+    });
+  }
+
+  const user = interaction.options.getUser("user");
+
+  const ownerId = channel.topic.split(":")[1];
+
+  if (user.id === ownerId) {
+    return interaction.reply({
+      content: "❌ You cannot remove the ticket owner.",
+      ephemeral: true
+    });
+  }
+
+  await channel.permissionOverwrites.delete(user.id);
+
+  return interaction.reply(
+    `✅ Removed **${user.tag}** from the ticket.`
+  );
+}
+
+
+// =========================
+// /claim
+// =========================
+
+if (commandName === "claim") {
+
+  const channel = interaction.channel;
+
+  if (
+    !channel ||
+    channel.type !== ChannelType.GuildText ||
+    !channel.topic?.startsWith("ticket-owner:")
+  ) {
+    return interaction.reply({
+      content: "❌ This command can only be used inside a ticket.",
+      ephemeral: true
+    });
+  }
+
+  if (
+    !interaction.member.permissions.has(
+      PermissionFlagsBits.ManageChannels
+    )
+  ) {
+    return interaction.reply({
+      content: "❌ You need **Manage Channels** permission.",
+      ephemeral: true
+    });
+  }
+
+  const claimedBy = channel.topic.match(/claimed-by:(\d+)/);
+
+  if (claimedBy) {
+    return interaction.reply({
+      content: `❌ This ticket is already claimed by <@${claimedBy[1]}>.`,
+      ephemeral: true
+    });
+  }
+
+  const ownerId = channel.topic.split(":")[1];
+
+  await channel.setTopic(
+    `ticket-owner:${ownerId}|claimed-by:${interaction.user.id}`
+  );
+
+  return interaction.reply(
+    `🎫 **${interaction.user.tag}** has claimed this ticket.`
+  );
+}
+
+
+// =========================
+// /unclaim
+// =========================
+
+if (commandName === "unclaim") {
+
+  const channel = interaction.channel;
+
+  if (
+    !channel ||
+    channel.type !== ChannelType.GuildText ||
+    !channel.topic?.startsWith("ticket-owner:")
+  ) {
+    return interaction.reply({
+      content: "❌ This command can only be used inside a ticket.",
+      ephemeral: true
+    });
+  }
+
+  if (
+    !interaction.member.permissions.has(
+      PermissionFlagsBits.ManageChannels
+    )
+  ) {
+    return interaction.reply({
+      content: "❌ You need **Manage Channels** permission.",
+      ephemeral: true
+    });
+  }
+
+  const ownerId = channel.topic.split("|")[0].split(":")[1];
+
+  const claimedBy = channel.topic.match(/claimed-by:(\d+)/);
+
+  if (!claimedBy) {
+    return interaction.reply({
+      content: "❌ This ticket is not currently claimed.",
+      ephemeral: true
+    });
+  }
+
+  if (
+    claimedBy[1] !== interaction.user.id &&
+    interaction.user.id !== guild?.ownerId
+  ) {
+    return interaction.reply({
+      content: "❌ Only the staff member who claimed this ticket can unclaim it.",
+      ephemeral: true
+    });
+  }
+
+  await channel.setTopic(`ticket-owner:${ownerId}`);
+
+  return interaction.reply(
+    `✅ **${interaction.user.tag}** has unclaimed this ticket.`
+  );
+}
+
+
+// =========================
+// /ticketpanel
+// =========================
+
+if (commandName === "ticketpanel") {
+
+  if (
+    !interaction.member.permissions.has(
+      PermissionFlagsBits.ManageChannels
+    )
+  ) {
+    return interaction.reply({
+      content: "❌ You need **Manage Channels** permission.",
+      ephemeral: true
+    });
+  }
+
+  const button = new ButtonBuilder()
+    .setCustomId("ticket_create")
+    .setLabel("Create Ticket")
+    .setEmoji("🎫")
+    .setStyle(ButtonStyle.Primary);
+
+  const row = new ActionRowBuilder()
+    .addComponents(button);
+
+  const embed = new EmbedBuilder()
+    .setTitle("🎫 Grand Mafia Support")
+    .setDescription(
+      "Need help? Click **Create Ticket** below to open a private support ticket."
+    )
+    .setColor(0x5865f2);
+
+  await interaction.channel.send({
+    embeds: [embed],
+    components: [row]
+  });
+
+  return interaction.reply({
+    content: "✅ Ticket panel created.",
+    ephemeral: true
+  });
+}
+
+
+// =========================
+// /ticketsetup
+// =========================
+
+if (commandName === "ticketsetup") {
+
+  if (
+    !interaction.member.permissions.has(
+      PermissionFlagsBits.Administrator
+    )
+  ) {
+    return interaction.reply({
+      content: "❌ You need **Administrator** permission.",
+      ephemeral: true
+    });
+  }
+
+  let category = interaction.guild.channels.cache.find(
+    channel =>
+      channel.type === ChannelType.GuildCategory &&
+      channel.name.toLowerCase() === TICKET_CATEGORY.toLowerCase()
+  );
+
+  if (!category) {
+    category = await interaction.guild.channels.create({
+      name: TICKET_CATEGORY,
+      type: ChannelType.GuildCategory
+    });
+  }
+
+  let supportRole = interaction.guild.roles.cache.find(
+    role =>
+      role.name.toLowerCase() === SUPPORT_ROLE.toLowerCase()
+  );
+
+  if (!supportRole) {
+    supportRole = await interaction.guild.roles.create({
+      name: SUPPORT_ROLE,
+      reason: "Ticket system setup"
+    });
+  }
+
+  return interaction.reply({
+    content:
+      `✅ Ticket system configured.\n` +
+      `📁 Category: ${category}\n` +
+      `👥 Support Role: ${supportRole}`,
+    ephemeral: true
+  });
+}
+
+
+// =========================
+// TICKET BUTTONS
+// =========================
+
+if (interaction.isButton()) {
+
+  // CREATE TICKET BUTTON
+  if (interaction.customId === "ticket_create") {
+
+    const guild = interaction.guild;
+
+    const existingTicket = guild.channels.cache.find(
+      channel =>
+        channel.type === ChannelType.GuildText &&
+        channel.topic === `ticket-owner:${interaction.user.id}`
+    );
+
+    if (existingTicket) {
+      return interaction.reply({
+        content: `❌ You already have an open ticket: ${existingTicket}`,
+        ephemeral: true
+      });
+    }
+
+    let category = guild.channels.cache.find(
+      channel =>
+        channel.type === ChannelType.GuildCategory &&
+        channel.name.toLowerCase() === TICKET_CATEGORY.toLowerCase()
+    );
+
+    if (!category) {
+      category = await guild.channels.create({
+        name: TICKET_CATEGORY,
+        type: ChannelType.GuildCategory
+      });
+    }
+
+    const supportRole = guild.roles.cache.find(
+      role =>
+        role.name.toLowerCase() === SUPPORT_ROLE.toLowerCase()
+    );
+
+    const permissions = [
+      {
+        id: guild.id,
+        deny: [PermissionFlagsBits.ViewChannel]
+      },
+      {
+        id: interaction.user.id,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory
+        ]
+      },
+      {
+        id: guild.members.me.id,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.ManageChannels
+        ]
+      }
+    ];
+
+    if (supportRole) {
+      permissions.push({
+        id: supportRole.id,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory
+        ]
+      });
+    }
+
+    const ticket = await guild.channels.create({
+      name: `ticket-${interaction.user.username}`
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "")
+        .slice(0, 90),
+
+      type: ChannelType.GuildText,
+
+      parent: category.id,
+
+      topic: `ticket-owner:${interaction.user.id}`,
+
+      permissionOverwrites: permissions
+    });
+
+    const close = new ButtonBuilder()
+      .setCustomId("ticket_close")
+      .setLabel("Close Ticket")
+      .setEmoji("🔒")
+      .setStyle(ButtonStyle.Danger);
+
+    const claim = new ButtonBuilder()
+      .setCustomId("ticket_claim")
+      .setLabel("Claim")
+      .setEmoji("🎫")
+      .setStyle(ButtonStyle.Primary);
+
+    const row = new ActionRowBuilder()
+      .addComponents(close, claim);
+
+    await ticket.send({
+      content: `${interaction.user}`,
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("🎫 Support Ticket")
+          .setDescription(
+            "Please explain your issue. A support member will assist you shortly."
+          )
+          .setColor(0x5865f2)
+      ],
+      components: [row]
+    });
+
+    return interaction.reply({
+      content: `✅ Ticket created: ${ticket}`,
+      ephemeral: true
+    });
+  }
+
+
+  // CLOSE BUTTON
+  if (interaction.customId === "ticket_close") {
+
+    const channel = interaction.channel;
+
+    if (
+      !channel ||
+      !channel.topic?.startsWith("ticket-owner:")
+    ) {
+      return interaction.reply({
+        content: "❌ This is not a ticket.",
+        ephemeral: true
+      });
+    }
+
+    const ownerId =
+      channel.topic.split("|")[0].split(":")[1];
+
+    const isOwner =
+      interaction.user.id === ownerId;
+
+    const isStaff =
+      interaction.member.permissions.has(
+        PermissionFlagsBits.ManageChannels
+      );
+
+    if (!isOwner && !isStaff) {
+      return interaction.reply({
+        content: "❌ You cannot close this ticket.",
+        ephemeral: true
+      });
+    }
+
+    await interaction.reply(
+      "🔒 Ticket closing in **5 seconds**..."
+    );
+
+    setTimeout(() => {
+      channel.delete("Ticket closed").catch(() => {});
+    }, 5000);
+
+    return;
+  }
+
+
+  // CLAIM BUTTON
+  if (interaction.customId === "ticket_claim") {
+
+    const channel = interaction.channel;
+
+    if (
+      !channel ||
+      !channel.topic?.startsWith("ticket-owner:")
+    ) {
+      return interaction.reply({
+        content: "❌ This is not a ticket.",
+        ephemeral: true
+      });
+    }
+
+    if (
+      !interaction.member.permissions.has(
+        PermissionFlagsBits.ManageChannels
+      )
+    ) {
+      return interaction.reply({
+        content: "❌ You need **Manage Channels** permission.",
+        ephemeral: true
+      });
+    }
+
+    if (channel.topic.includes("|claimed-by:")) {
+      return interaction.reply({
+        content: "❌ This ticket is already claimed.",
+        ephemeral: true
+      });
+    }
+
+    await channel.setTopic(
+      `${channel.topic}|claimed-by:${interaction.user.id}`
+    );
+
+    return interaction.reply(
+      `🎫 **${interaction.user.tag}** claimed this ticket.`
+    );
+  }
+}
