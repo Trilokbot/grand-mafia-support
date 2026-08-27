@@ -8029,3 +8029,532 @@ client.on("interactionCreate", async interaction => {
 console.log(
   "✅ Part 21 loaded — Invite tracking active."
 );
+
+// =========================
+// PART 22 — MODERATION CASE SYSTEM
+// =========================
+
+// =========================
+// CREATE MODERATION CASE
+// =========================
+
+async function createModCase({
+  guildId,
+  userId,
+  moderatorId,
+  action,
+  reason
+}) {
+  try {
+    const result = await global.dbQuery(
+      `
+      INSERT INTO moderation_cases
+      (
+        guild_id,
+        user_id,
+        moderator_id,
+        action,
+        reason
+      )
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id
+      `,
+      [
+        guildId,
+        userId,
+        moderatorId,
+        action,
+        reason || "No reason provided"
+      ]
+    );
+
+    return result.rows[0]?.id || null;
+
+  } catch (error) {
+    console.error(
+      "❌ Failed to create moderation case:",
+      error.message
+    );
+
+    return null;
+  }
+}
+
+// =========================
+// WARN COMMAND
+// =========================
+
+client.on("interactionCreate", async interaction => {
+  try {
+    if (!interaction.isChatInputCommand()) return;
+    if (!interaction.guild) return;
+
+    if (interaction.commandName !== "warn") {
+      return;
+    }
+
+    if (
+      !interaction.member.permissions.has(
+        PermissionFlagsBits.ModerateMembers
+      )
+    ) {
+      return interaction.reply({
+        content:
+          "❌ You need **Moderate Members** permission.",
+        ephemeral: true
+      });
+    }
+
+    const user =
+      interaction.options.getUser("user");
+
+    const reason =
+      interaction.options.getString("reason") ||
+      "No reason provided";
+
+    const member =
+      await interaction.guild.members
+        .fetch(user.id)
+        .catch(() => null);
+
+    if (!member) {
+      return interaction.reply({
+        content:
+          "❌ That member is not in this server.",
+        ephemeral: true
+      });
+    }
+
+    if (
+      user.id === interaction.user.id
+    ) {
+      return interaction.reply({
+        content:
+          "❌ You cannot warn yourself.",
+        ephemeral: true
+      });
+    }
+
+    if (
+      member.roles.highest.position >=
+      interaction.member.roles.highest.position &&
+      interaction.guild.ownerId !==
+      interaction.user.id
+    ) {
+      return interaction.reply({
+        content:
+          "❌ You cannot warn a member with an equal or higher role.",
+        ephemeral: true
+      });
+    }
+
+    const caseId = await createModCase({
+      guildId: interaction.guild.id,
+      userId: user.id,
+      moderatorId: interaction.user.id,
+      action: "WARN",
+      reason
+    });
+
+    if (!caseId) {
+      return interaction.reply({
+        content:
+          "❌ Failed to create moderation case.",
+        ephemeral: true
+      });
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle("⚠️ Member Warned")
+      .addFields(
+        {
+          name: "User",
+          value: `${user}`,
+          inline: true
+        },
+        {
+          name: "Moderator",
+          value: `${interaction.user}`,
+          inline: true
+        },
+        {
+          name: "Case",
+          value: `#${caseId}`,
+          inline: true
+        },
+        {
+          name: "Reason",
+          value: reason
+        }
+      )
+      .setTimestamp();
+
+    await interaction.reply({
+      embeds: [embed]
+    });
+
+    // DM member
+    await user.send({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("⚠️ You received a warning")
+          .setDescription(
+            `You were warned in **${interaction.guild.name}**.`
+          )
+          .addFields({
+            name: "Reason",
+            value: reason
+          })
+          .setTimestamp()
+      ]
+    }).catch(() => {});
+
+    // Logging
+    if (
+      typeof global.sendLog === "function"
+    ) {
+      await global.sendLog(
+        interaction.guild.id,
+        "MODERATION",
+        `⚠️ WARN | Case #${caseId}\n` +
+        `User: ${user.tag}\n` +
+        `Moderator: ${interaction.user.tag}\n` +
+        `Reason: ${reason}`
+      ).catch(() => {});
+    }
+
+  } catch (error) {
+    console.error(
+      "❌ Warn command error:",
+      error.message
+    );
+
+    if (!interaction.replied) {
+      await interaction.reply({
+        content:
+          "❌ Warning failed.",
+        ephemeral: true
+      }).catch(() => {});
+    }
+  }
+});
+
+// =========================
+// WARNINGS COMMAND
+// =========================
+
+client.on("interactionCreate", async interaction => {
+  try {
+    if (!interaction.isChatInputCommand()) return;
+    if (!interaction.guild) return;
+
+    if (
+      interaction.commandName !== "warnings"
+    ) {
+      return;
+    }
+
+    const user =
+      interaction.options.getUser("user");
+
+    const result =
+      await global.dbQuery(
+        `
+        SELECT id, reason, moderator_id, created_at
+        FROM moderation_cases
+        WHERE guild_id = $1
+        AND user_id = $2
+        AND action = 'WARN'
+        ORDER BY id DESC
+        LIMIT 25
+        `,
+        [
+          interaction.guild.id,
+          user.id
+        ]
+      );
+
+    if (!result.rows.length) {
+      return interaction.reply({
+        content:
+          `✅ ${user.tag} has no warnings.`
+      });
+    }
+
+    let description = "";
+
+    for (const row of result.rows) {
+      description +=
+        `**Case #${row.id}** — ${row.reason}\n` +
+        `Moderator: <@${row.moderator_id}>\n` +
+        `Date: <t:${Math.floor(
+          new Date(row.created_at).getTime() / 1000
+        )}:R>\n\n`;
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle(`⚠️ Warnings — ${user.tag}`)
+      .setDescription(description)
+      .setFooter({
+        text: `${result.rows.length} warning(s)`
+      })
+      .setTimestamp();
+
+    return interaction.reply({
+      embeds: [embed]
+    });
+
+  } catch (error) {
+    console.error(
+      "❌ Warnings command error:",
+      error.message
+    );
+
+    if (!interaction.replied) {
+      await interaction.reply({
+        content:
+          "❌ Failed to load warnings.",
+        ephemeral: true
+      }).catch(() => {});
+    }
+  }
+});
+
+// =========================
+// CLEAR WARNINGS
+// =========================
+
+client.on("interactionCreate", async interaction => {
+  try {
+    if (!interaction.isChatInputCommand()) return;
+    if (!interaction.guild) return;
+
+    if (
+      interaction.commandName !==
+      "clearwarnings"
+    ) {
+      return;
+    }
+
+    if (
+      !interaction.member.permissions.has(
+        PermissionFlagsBits.ModerateMembers
+      )
+    ) {
+      return interaction.reply({
+        content:
+          "❌ You need **Moderate Members** permission.",
+        ephemeral: true
+      });
+    }
+
+    const user =
+      interaction.options.getUser("user");
+
+    await global.dbQuery(
+      `
+      UPDATE moderation_cases
+      SET action = 'WARN_CLEARED'
+      WHERE guild_id = $1
+      AND user_id = $2
+      AND action = 'WARN'
+      `,
+      [
+        interaction.guild.id,
+        user.id
+      ]
+    );
+
+    const caseId = await createModCase({
+      guildId: interaction.guild.id,
+      userId: user.id,
+      moderatorId: interaction.user.id,
+      action: "CLEAR_WARNINGS",
+      reason: "All warnings cleared"
+    });
+
+    return interaction.reply({
+      content:
+        `✅ Cleared all warnings for ${user}.\n` +
+        `📁 Case: #${caseId || "N/A"}`
+    });
+
+  } catch (error) {
+    console.error(
+      "❌ Clear warnings error:",
+      error.message
+    );
+
+    if (!interaction.replied) {
+      await interaction.reply({
+        content:
+          "❌ Failed to clear warnings.",
+        ephemeral: true
+      }).catch(() => {});
+    }
+  }
+});
+
+// =========================
+// CASE COMMAND
+// =========================
+
+client.on("interactionCreate", async interaction => {
+  try {
+    if (!interaction.isChatInputCommand()) return;
+    if (!interaction.guild) return;
+
+    if (interaction.commandName !== "case") {
+      return;
+    }
+
+    const id =
+      interaction.options.getInteger("id");
+
+    const result =
+      await global.dbQuery(
+        `
+        SELECT *
+        FROM moderation_cases
+        WHERE id = $1
+        AND guild_id = $2
+        `,
+        [
+          id,
+          interaction.guild.id
+        ]
+      );
+
+    if (!result.rows.length) {
+      return interaction.reply({
+        content:
+          `❌ Case #${id} was not found.`,
+        ephemeral: true
+      });
+    }
+
+    const row = result.rows[0];
+
+    const embed = new EmbedBuilder()
+      .setTitle(`📁 Moderation Case #${row.id}`)
+      .addFields(
+        {
+          name: "Action",
+          value: row.action,
+          inline: true
+        },
+        {
+          name: "User",
+          value: `<@${row.user_id}>`,
+          inline: true
+        },
+        {
+          name: "Moderator",
+          value: `<@${row.moderator_id}>`,
+          inline: true
+        },
+        {
+          name: "Reason",
+          value: row.reason || "No reason provided"
+        },
+        {
+          name: "Created",
+          value:
+            `<t:${Math.floor(
+              new Date(row.created_at).getTime() / 1000
+            )}:F>`
+        }
+      )
+      .setTimestamp();
+
+    return interaction.reply({
+      embeds: [embed]
+    });
+
+  } catch (error) {
+    console.error(
+      "❌ Case command error:",
+      error.message
+    );
+  }
+});
+
+// =========================
+// CASES COMMAND
+// =========================
+
+client.on("interactionCreate", async interaction => {
+  try {
+    if (!interaction.isChatInputCommand()) return;
+    if (!interaction.guild) return;
+
+    if (interaction.commandName !== "cases") {
+      return;
+    }
+
+    const user =
+      interaction.options.getUser("user");
+
+    const result =
+      await global.dbQuery(
+        `
+        SELECT id, action, reason, moderator_id, created_at
+        FROM moderation_cases
+        WHERE guild_id = $1
+        AND user_id = $2
+        ORDER BY id DESC
+        LIMIT 25
+        `,
+        [
+          interaction.guild.id,
+          user.id
+        ]
+      );
+
+    if (!result.rows.length) {
+      return interaction.reply({
+        content:
+          `📁 No moderation cases found for ${user}.`
+      });
+    }
+
+    let description = "";
+
+    for (const row of result.rows) {
+      description +=
+        `**#${row.id}** • **${row.action}**\n` +
+        `Reason: ${row.reason || "None"}\n` +
+        `Moderator: <@${row.moderator_id}>\n` +
+        `<t:${Math.floor(
+          new Date(row.created_at).getTime() / 1000
+        )}:R>\n\n`;
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle(`📁 Cases — ${user.tag}`)
+      .setDescription(description)
+      .setTimestamp();
+
+    return interaction.reply({
+      embeds: [embed]
+    });
+
+  } catch (error) {
+    console.error(
+      "❌ Cases command error:",
+      error.message
+    );
+
+    if (!interaction.replied) {
+      await interaction.reply({
+        content:
+          "❌ Failed to load moderation cases.",
+        ephemeral: true
+      }).catch(() => {});
+    }
+  }
+});
+
+console.log(
+  "✅ Part 22 loaded — Moderation case system active."
+);
