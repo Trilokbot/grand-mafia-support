@@ -7444,3 +7444,205 @@ setInterval(() => {
 console.log(
   "✅ Part 19 loaded — Verification system active."
 );
+
+// =========================
+// PART 20 — AUTO ROLE SYSTEM
+// =========================
+
+// =========================
+// GET AUTO ROLE
+// =========================
+
+async function getAutoRole(guildId) {
+  try {
+    const result = await global.dbQuery(
+      `
+      SELECT role_id
+      FROM autorole_config
+      WHERE guild_id = $1
+      `,
+      [guildId]
+    );
+
+    if (!result.rows.length) {
+      return null;
+    }
+
+    return result.rows[0].role_id || null;
+
+  } catch (error) {
+    console.error(
+      "❌ AutoRole database error:",
+      error.message
+    );
+
+    return null;
+  }
+}
+
+// =========================
+// AUTOROLE COMMAND
+// =========================
+
+client.on("interactionCreate", async interaction => {
+  try {
+    if (!interaction.isChatInputCommand()) return;
+    if (!interaction.guild) return;
+
+    if (
+      interaction.commandName !== "autorole"
+    ) {
+      return;
+    }
+
+    if (
+      !interaction.member.permissions.has(
+        PermissionFlagsBits.ManageGuild
+      )
+    ) {
+      return interaction.reply({
+        content:
+          "❌ You need **Manage Server** permission.",
+        ephemeral: true
+      });
+    }
+
+    const role =
+      interaction.options.getRole("role");
+
+    if (!role) {
+      return interaction.reply({
+        content:
+          "❌ Please select a role.",
+        ephemeral: true
+      });
+    }
+
+    // Bot cannot assign a role above itself
+    if (!role.editable) {
+      return interaction.reply({
+        content:
+          "❌ I cannot assign this role.\n\n" +
+          "Move my bot role **above** the selected role.",
+        ephemeral: true
+      });
+    }
+
+    // Prevent @everyone
+    if (
+      role.id === interaction.guild.id
+    ) {
+      return interaction.reply({
+        content:
+          "❌ You cannot use @everyone as the auto role.",
+        ephemeral: true
+      });
+    }
+
+    await global.dbQuery(
+      `
+      INSERT INTO autorole_config
+      (guild_id, role_id)
+      VALUES ($1, $2)
+      ON CONFLICT (guild_id)
+      DO UPDATE SET role_id = $2
+      `,
+      [
+        interaction.guild.id,
+        role.id
+      ]
+    );
+
+    return interaction.reply({
+      content:
+        `✅ Auto role configured successfully.\n` +
+        `👤 New members will receive ${role}.`
+    });
+
+  } catch (error) {
+    console.error(
+      "❌ AutoRole command error:",
+      error.message
+    );
+
+    try {
+      if (!interaction.replied) {
+        await interaction.reply({
+          content:
+            "❌ Failed to configure auto role.",
+          ephemeral: true
+        });
+      }
+    } catch {}
+  }
+});
+
+// =========================
+// MEMBER JOIN
+// =========================
+
+client.on("guildMemberAdd", async member => {
+  try {
+    if (!member.guild) return;
+
+    const roleId =
+      await getAutoRole(
+        member.guild.id
+      );
+
+    if (!roleId) return;
+
+    const role =
+      member.guild.roles.cache.get(
+        roleId
+      );
+
+    if (!role) {
+      console.log(
+        `⚠️ AutoRole role no longer exists in ${member.guild.name}`
+      );
+      return;
+    }
+
+    if (!role.editable) {
+      console.log(
+        `⚠️ Cannot assign AutoRole in ${member.guild.name}: bot role is too low.`
+      );
+      return;
+    }
+
+    if (member.roles.cache.has(role.id)) {
+      return;
+    }
+
+    await member.roles.add(
+      role,
+      "Automatic member role"
+    );
+
+    console.log(
+      `✅ AutoRole assigned to ${member.user.tag}`
+    );
+
+    // Log if logging system exists
+    if (
+      typeof global.sendLog === "function"
+    ) {
+      await global.sendLog(
+        member.guild.id,
+        "AUTOROLE",
+        `${member.user.tag} received ${role.name}.`
+      ).catch(() => {});
+    }
+
+  } catch (error) {
+    console.error(
+      "❌ AutoRole member join error:",
+      error.message
+    );
+  }
+});
+
+console.log(
+  "✅ Part 20 loaded — AutoRole system active."
+);
