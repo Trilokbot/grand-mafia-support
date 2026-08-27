@@ -1,13 +1,15 @@
 {
   "name": "grand-mafia-support-bot",
   "version": "1.0.0",
-  "description": "Grand Mafia Discord Support & Moderation Bot",
+  "description": "Grand Mafia Discord Support Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
+  "engines": {
+    "node": "22.x"
+  },
   "dependencies": {
-    "discord.js": "^14.21.0",
-    "dotenv": "^17.2.1"
+    "discord.js": "^14.25.1"
   }
 }
