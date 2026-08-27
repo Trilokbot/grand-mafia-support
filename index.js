@@ -3497,3 +3497,404 @@ ensureSecurityTable()
       error.message
     );
   });
+
+// ============================================================
+// PART 10 — LOGGING + AUDIT SYSTEM
+// ============================================================
+
+async function ensureLoggingTable() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS logging_config (
+        guild_id VARCHAR(30) PRIMARY KEY,
+        log_channel_id VARCHAR(30),
+        mod_log_channel_id VARCHAR(30),
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    console.log("✅ Logging database initialized.");
+  } catch (error) {
+    console.error("❌ Logging database error:", error.message);
+  }
+}
+
+
+// ============================================================
+// GET LOG CONFIG
+// ============================================================
+
+async function getLoggingConfig(guildId) {
+  const result = await pool.query(
+    `SELECT * FROM logging_config WHERE guild_id = $1`,
+    [guildId]
+  );
+
+  if (result.rows.length > 0) {
+    return result.rows[0];
+  }
+
+  const created = await pool.query(
+    `INSERT INTO logging_config (guild_id)
+     VALUES ($1)
+     RETURNING *`,
+    [guildId]
+  );
+
+  return created.rows[0];
+}
+
+
+// ============================================================
+// UPDATE LOG CHANNEL
+// ============================================================
+
+async function setLogChannel(guildId, channelId) {
+  await pool.query(
+    `INSERT INTO logging_config (guild_id, log_channel_id)
+     VALUES ($1, $2)
+     ON CONFLICT (guild_id)
+     DO UPDATE SET
+       log_channel_id = EXCLUDED.log_channel_id,
+       updated_at = CURRENT_TIMESTAMP`,
+    [guildId, channelId]
+  );
+}
+
+
+// ============================================================
+// UPDATE MOD LOG CHANNEL
+// ============================================================
+
+async function setModLogChannel(guildId, channelId) {
+  await pool.query(
+    `INSERT INTO logging_config (guild_id, mod_log_channel_id)
+     VALUES ($1, $2)
+     ON CONFLICT (guild_id)
+     DO UPDATE SET
+       mod_log_channel_id = EXCLUDED.mod_log_channel_id,
+       updated_at = CURRENT_TIMESTAMP`,
+    [guildId, channelId]
+  );
+}
+
+
+// ============================================================
+// SEND LOG
+// ============================================================
+
+async function sendLog(guild, embed, moderation = false) {
+  try {
+    const config = await getLoggingConfig(guild.id);
+
+    const channelId = moderation
+      ? config.mod_log_channel_id
+      : config.log_channel_id;
+
+    if (!channelId) return;
+
+    const channel = guild.channels.cache.get(channelId);
+
+    if (!channel || !channel.isTextBased()) return;
+
+    await channel.send({
+      embeds: [embed]
+    }).catch(() => {});
+
+  } catch (error) {
+    console.error("❌ Send log error:", error.message);
+  }
+}
+
+
+// ============================================================
+// SETLOGS
+// ============================================================
+
+async function handleSetLogs(interaction) {
+  if (!interaction.memberPermissions?.has("ManageGuild")) {
+    return interaction.reply({
+      content: "❌ You need **Manage Server** permission.",
+      ephemeral: true
+    });
+  }
+
+  const channel = interaction.options.getChannel("channel");
+
+  if (!channel || !channel.isTextBased()) {
+    return interaction.reply({
+      content: "❌ Please select a text channel.",
+      ephemeral: true
+    });
+  }
+
+  await setLogChannel(
+    interaction.guild.id,
+    channel.id
+  );
+
+  await interaction.reply({
+    content: `✅ General logs will now be sent to ${channel}.`,
+    ephemeral: true
+  });
+}
+
+
+// ============================================================
+// SETMODLOGS
+// ============================================================
+
+async function handleSetModLogs(interaction) {
+  if (!interaction.memberPermissions?.has("ManageGuild")) {
+    return interaction.reply({
+      content: "❌ You need **Manage Server** permission.",
+      ephemeral: true
+    });
+  }
+
+  const channel = interaction.options.getChannel("channel");
+
+  if (!channel || !channel.isTextBased()) {
+    return interaction.reply({
+      content: "❌ Please select a text channel.",
+      ephemeral: true
+    });
+  }
+
+  await setModLogChannel(
+    interaction.guild.id,
+    channel.id
+  );
+
+  await interaction.reply({
+    content: `✅ Moderation logs will now be sent to ${channel}.`,
+    ephemeral: true
+  });
+}
+
+
+// ============================================================
+// LOG CONFIGURATION
+// ============================================================
+
+async function handleLogs(interaction) {
+  if (!interaction.memberPermissions?.has("ManageGuild")) {
+    return interaction.reply({
+      content: "❌ You need **Manage Server** permission.",
+      ephemeral: true
+    });
+  }
+
+  const config = await getLoggingConfig(
+    interaction.guild.id
+  );
+
+  const general =
+    config.log_channel_id
+      ? `<#${config.log_channel_id}>`
+      : "Not configured";
+
+  const moderation =
+    config.mod_log_channel_id
+      ? `<#${config.mod_log_channel_id}>`
+      : "Not configured";
+
+  const embed = new EmbedBuilder()
+    .setTitle("📋 Logging Configuration")
+    .addFields(
+      {
+        name: "General Logs",
+        value: general,
+        inline: true
+      },
+      {
+        name: "Moderation Logs",
+        value: moderation,
+        inline: true
+      }
+    )
+    .setTimestamp();
+
+  return interaction.reply({
+    embeds: [embed],
+    ephemeral: true
+  });
+}
+
+
+// ============================================================
+// MESSAGE DELETE LOG
+// ============================================================
+
+client.on("messageDelete", async (message) => {
+  try {
+    if (!message.guild) return;
+
+    const embed = new EmbedBuilder()
+      .setTitle("🗑️ Message Deleted")
+      .addFields(
+        {
+          name: "User",
+          value: message.author
+            ? `${message.author} (${message.author.id})`
+            : "Unknown"
+        },
+        {
+          name: "Channel",
+          value: `${message.channel}`
+        },
+        {
+          name: "Content",
+          value: message.content
+            ? message.content.slice(0, 1000)
+            : "No text content"
+        }
+      )
+      .setTimestamp();
+
+    await sendLog(message.guild, embed);
+
+  } catch (error) {
+    console.error("❌ Message delete log error:", error.message);
+  }
+});
+
+
+// ============================================================
+// MESSAGE EDIT LOG
+// ============================================================
+
+client.on("messageUpdate", async (oldMessage, newMessage) => {
+  try {
+    if (!oldMessage.guild) return;
+    if (oldMessage.author?.bot) return;
+
+    if (oldMessage.content === newMessage.content) return;
+
+    const embed = new EmbedBuilder()
+      .setTitle("✏️ Message Edited")
+      .addFields(
+        {
+          name: "User",
+          value: oldMessage.author
+            ? `${oldMessage.author}`
+            : "Unknown"
+        },
+        {
+          name: "Channel",
+          value: `${oldMessage.channel}`
+        },
+        {
+          name: "Before",
+          value: oldMessage.content
+            ? oldMessage.content.slice(0, 1000)
+            : "Empty"
+        },
+        {
+          name: "After",
+          value: newMessage.content
+            ? newMessage.content.slice(0, 1000)
+            : "Empty"
+        }
+      )
+      .setTimestamp();
+
+    await sendLog(oldMessage.guild, embed);
+
+  } catch (error) {
+    console.error("❌ Message edit log error:", error.message);
+  }
+});
+
+
+// ============================================================
+// MEMBER JOIN LOG
+// ============================================================
+
+client.on("guildMemberAdd", async (member) => {
+  try {
+    const embed = new EmbedBuilder()
+      .setTitle("📥 Member Joined")
+      .setDescription(
+        `${member.user} joined the server.`
+      )
+      .addFields({
+        name: "User ID",
+        value: member.id
+      })
+      .setTimestamp();
+
+    await sendLog(member.guild, embed);
+
+  } catch (error) {
+    console.error("❌ Join log error:", error.message);
+  }
+});
+
+
+// ============================================================
+// MEMBER LEAVE LOG
+// ============================================================
+
+client.on("guildMemberRemove", async (member) => {
+  try {
+    const embed = new EmbedBuilder()
+      .setTitle("📤 Member Left")
+      .setDescription(
+        `${member.user.tag} left the server.`
+      )
+      .addFields({
+        name: "User ID",
+        value: member.id
+      })
+      .setTimestamp();
+
+    await sendLog(member.guild, embed);
+
+  } catch (error) {
+    console.error("❌ Leave log error:", error.message);
+  }
+});
+
+
+// ============================================================
+// PART 10 COMMAND ROUTER
+// ============================================================
+
+async function handlePart10Commands(interaction) {
+  if (!interaction.isChatInputCommand()) return false;
+
+  switch (interaction.commandName) {
+
+    case "setlogs":
+      await handleSetLogs(interaction);
+      return true;
+
+    case "setmodlogs":
+      await handleSetModLogs(interaction);
+      return true;
+
+    case "logs":
+      await handleLogs(interaction);
+      return true;
+
+    default:
+      return false;
+  }
+}
+
+
+// ============================================================
+// INITIALIZE PART 10
+// ============================================================
+
+ensureLoggingTable()
+  .then(() => {
+    console.log("✅ Part 10 Logging system initialized.");
+  })
+  .catch(error => {
+    console.error(
+      "❌ Part 10 initialization failed:",
+      error.message
+    );
+  });
