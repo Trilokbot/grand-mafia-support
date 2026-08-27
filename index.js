@@ -258,9 +258,7 @@ client.on(Events.MessageCreate, async message => {
     const player =
       await client.users.fetch(ticket.playerId);
 
-    await player.send(
-      `👮 **Support:** ${message.content}`
-    );
+    await player.send(message.content);
 
     await message.react("✅");
 
