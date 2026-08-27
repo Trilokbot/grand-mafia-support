@@ -1532,3 +1532,394 @@ client.on("interactionCreate", async (interaction) => {
   }
 
 });
+
+
+// =========================
+// PART 6 — MODERATION SYSTEM
+// =========================
+
+const { PermissionFlagsBits } = require("discord.js");
+
+async function getTargetMember(interaction, optionName = "user") {
+  const user = interaction.options.getUser(optionName);
+  if (!user) return null;
+
+  return await interaction.guild.members
+    .fetch(user.id)
+    .catch(() => null);
+}
+
+function canModerate(interaction, target) {
+  if (!target) return "❌ Member not found.";
+
+  if (target.id === interaction.user.id) {
+    return "❌ You cannot moderate yourself.";
+  }
+
+  if (target.id === interaction.guild.ownerId) {
+    return "❌ You cannot moderate the server owner.";
+  }
+
+  if (
+    interaction.member.id !== interaction.guild.ownerId &&
+    target.roles.highest.position >= interaction.member.roles.highest.position
+  ) {
+    return "❌ You cannot moderate a member with an equal or higher role.";
+  }
+
+  if (
+    interaction.guild.members.me &&
+    target.roles.highest.position >=
+      interaction.guild.members.me.roles.highest.position
+  ) {
+    return "❌ My highest role must be above the target member's highest role.";
+  }
+
+  return null;
+}
+
+async function sendModerationDM(member, action, reason, moderator) {
+  await member.send({
+    embeds: [
+      {
+        color: 0xff0000,
+        title: `⚠️ Moderation Action: ${action}`,
+        fields: [
+          {
+            name: "Server",
+            value: member.guild.name,
+            inline: true
+          },
+          {
+            name: "Reason",
+            value: reason || "No reason provided",
+            inline: true
+          },
+          {
+            name: "Moderator",
+            value: moderator.tag,
+            inline: true
+          }
+        ],
+        timestamp: new Date()
+      }
+    ]
+  }).catch(() => {});
+}
+
+// =========================
+// BAN
+// =========================
+
+if (commandName === "ban") {
+  if (!interaction.member.permissions.has(PermissionFlagsBits.BanMembers)) {
+    return interaction.reply({
+      content: "❌ You need **Ban Members** permission.",
+      ephemeral: true
+    });
+  }
+
+  const target = await getTargetMember(interaction);
+  const error = canModerate(interaction, target);
+
+  if (error) {
+    return interaction.reply({
+      content: error,
+      ephemeral: true
+    });
+  }
+
+  if (!target.bannable) {
+    return interaction.reply({
+      content: "❌ I cannot ban this member.",
+      ephemeral: true
+    });
+  }
+
+  const reason =
+    interaction.options.getString("reason") ||
+    "No reason provided";
+
+  await sendModerationDM(
+    target,
+    "Ban",
+    reason,
+    interaction.user
+  );
+
+  await target.ban({
+    reason: `${reason} | Moderator: ${interaction.user.tag}`
+  });
+
+  return interaction.reply(
+    `🔨 **${target.user.tag}** has been banned.\n**Reason:** ${reason}`
+  );
+}
+
+// =========================
+// KICK
+// =========================
+
+if (commandName === "kick") {
+  if (!interaction.member.permissions.has(PermissionFlagsBits.KickMembers)) {
+    return interaction.reply({
+      content: "❌ You need **Kick Members** permission.",
+      ephemeral: true
+    });
+  }
+
+  const target = await getTargetMember(interaction);
+  const error = canModerate(interaction, target);
+
+  if (error) {
+    return interaction.reply({
+      content: error,
+      ephemeral: true
+    });
+  }
+
+  if (!target.kickable) {
+    return interaction.reply({
+      content: "❌ I cannot kick this member.",
+      ephemeral: true
+    });
+  }
+
+  const reason =
+    interaction.options.getString("reason") ||
+    "No reason provided";
+
+  await sendModerationDM(
+    target,
+    "Kick",
+    reason,
+    interaction.user
+  );
+
+  await target.kick(
+    `${reason} | Moderator: ${interaction.user.tag}`
+  );
+
+  return interaction.reply(
+    `👢 **${target.user.tag}** has been kicked.\n**Reason:** ${reason}`
+  );
+}
+
+// =========================
+// TIMEOUT
+// =========================
+
+if (commandName === "timeout") {
+  if (
+    !interaction.member.permissions.has(
+      PermissionFlagsBits.ModerateMembers
+    )
+  ) {
+    return interaction.reply({
+      content: "❌ You need **Moderate Members** permission.",
+      ephemeral: true
+    });
+  }
+
+  const target = await getTargetMember(interaction);
+  const error = canModerate(interaction, target);
+
+  if (error) {
+    return interaction.reply({
+      content: error,
+      ephemeral: true
+    });
+  }
+
+  if (!target.moderatable) {
+    return interaction.reply({
+      content: "❌ I cannot timeout this member.",
+      ephemeral: true
+    });
+  }
+
+  const minutes = interaction.options.getInteger("minutes");
+
+  const reason =
+    interaction.options.getString("reason") ||
+    "No reason provided";
+
+  await sendModerationDM(
+    target,
+    `Timeout (${minutes} minutes)`,
+    reason,
+    interaction.user
+  );
+
+  await target.timeout(
+    minutes * 60 * 1000,
+    `${reason} | Moderator: ${interaction.user.tag}`
+  );
+
+  return interaction.reply(
+    `⏳ **${target.user.tag}** has been timed out for **${minutes} minutes**.\n**Reason:** ${reason}`
+  );
+}
+
+// =========================
+// UNTIMEOUT
+// =========================
+
+if (commandName === "untimeout") {
+  if (
+    !interaction.member.permissions.has(
+      PermissionFlagsBits.ModerateMembers
+    )
+  ) {
+    return interaction.reply({
+      content: "❌ You need **Moderate Members** permission.",
+      ephemeral: true
+    });
+  }
+
+  const target = await getTargetMember(interaction);
+  const error = canModerate(interaction, target);
+
+  if (error) {
+    return interaction.reply({
+      content: error,
+      ephemeral: true
+    });
+  }
+
+  if (!target.moderatable) {
+    return interaction.reply({
+      content: "❌ I cannot remove this member's timeout.",
+      ephemeral: true
+    });
+  }
+
+  await target.timeout(
+    null,
+    `Timeout removed by ${interaction.user.tag}`
+  );
+
+  return interaction.reply(
+    `✅ Timeout removed from **${target.user.tag}**.`
+  );
+}
+
+// =========================
+// CLEAR MESSAGES
+// =========================
+
+if (commandName === "clear") {
+  if (
+    !interaction.member.permissions.has(
+      PermissionFlagsBits.ManageMessages
+    )
+  ) {
+    return interaction.reply({
+      content: "❌ You need **Manage Messages** permission.",
+      ephemeral: true
+    });
+  }
+
+  const amount = interaction.options.getInteger("amount");
+
+  if (!interaction.channel || !interaction.channel.isTextBased()) {
+    return interaction.reply({
+      content: "❌ This command can only be used in a text channel.",
+      ephemeral: true
+    });
+  }
+
+  const deleted = await interaction.channel.bulkDelete(
+    amount,
+    true
+  );
+
+  return interaction.reply({
+    content: `🧹 Deleted **${deleted.size}** messages.`,
+    ephemeral: true
+  });
+}
+
+// =========================
+// LOCK CHANNEL
+// =========================
+
+if (commandName === "lock") {
+  if (
+    !interaction.member.permissions.has(
+      PermissionFlagsBits.ManageChannels
+    )
+  ) {
+    return interaction.reply({
+      content: "❌ You need **Manage Channels** permission.",
+      ephemeral: true
+    });
+  }
+
+  await interaction.channel.permissionOverwrites.edit(
+    interaction.guild.roles.everyone,
+    {
+      SendMessages: false
+    }
+  );
+
+  return interaction.reply(
+    `🔒 ${interaction.channel} has been locked.`
+  );
+}
+
+// =========================
+// UNLOCK CHANNEL
+// =========================
+
+if (commandName === "unlock") {
+  if (
+    !interaction.member.permissions.has(
+      PermissionFlagsBits.ManageChannels
+    )
+  ) {
+    return interaction.reply({
+      content: "❌ You need **Manage Channels** permission.",
+      ephemeral: true
+    });
+  }
+
+  await interaction.channel.permissionOverwrites.edit(
+    interaction.guild.roles.everyone,
+    {
+      SendMessages: null
+    }
+  );
+
+  return interaction.reply(
+    `🔓 ${interaction.channel} has been unlocked.`
+  );
+}
+
+// =========================
+// SLOWMODE
+// =========================
+
+if (commandName === "slowmode") {
+  if (
+    !interaction.member.permissions.has(
+      PermissionFlagsBits.ManageChannels
+    )
+  ) {
+    return interaction.reply({
+      content: "❌ You need **Manage Channels** permission.",
+      ephemeral: true
+    });
+  }
+
+  const seconds =
+    interaction.options.getInteger("seconds");
+
+  await interaction.channel.setRateLimitPerUser(seconds);
+
+  return interaction.reply(
+    seconds === 0
+      ? "🚀 Slowmode disabled."
+      : `🐌 Slowmode set to **${seconds} seconds**.`
+  );
+}
