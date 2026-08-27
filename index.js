@@ -806,3 +806,729 @@ client.once("ready", async () => {
   }
 
 });
+
+
+// =========================
+// PART 4 — COMMAND HANDLERS
+// =========================
+
+client.on("interactionCreate", async (interaction) => {
+
+  // Ignore non-command interactions for now
+  if (!interaction.isChatInputCommand()) return;
+
+  const { commandName, member, guild } = interaction;
+
+  try {
+
+    // =========================
+    // BASIC INFORMATION
+    // =========================
+
+    if (commandName === "ping") {
+
+      const latency = Date.now() - interaction.createdTimestamp;
+
+      return interaction.reply({
+        content: `🏓 Pong!\nBot latency: **${latency}ms**`,
+        ephemeral: true
+      });
+    }
+
+
+    if (commandName === "help") {
+
+      return interaction.reply({
+        content:
+`# 🤖 Bot Commands
+
+### 📌 Information
+\`/help\` \`/ping\` \`/serverinfo\` \`/userinfo\` \`/avatar\` \`/roleinfo\`
+
+### 🛡️ Moderation
+\`/ban\` \`/unban\` \`/kick\` \`/timeout\` \`/untimeout\`
+\`/warn\` \`/warnings\` \`/clearwarnings\` \`/clear\`
+\`/lock\` \`/unlock\` \`/slowmode\`
+
+### 🎫 Tickets
+\`/ticket\` \`/close\` \`/add\` \`/remove\`
+\`/ticketpanel\` \`/ticketsetup\` \`/claim\` \`/unclaim\`
+
+### 🤖 Auto Moderation
+\`/automod\` \`/antispam\` \`/antilink\`
+\`/antimention\` \`/autotimeout\` \`/filter\`
+
+### 🔐 Security
+\`/security\` \`/verification\` \`/autorole\`
+
+### 📢 Announcements
+\`/announce\` \`/embed\` \`/say\` \`/announcehere\`
+
+### 📊 Logs
+\`/setlogs\` \`/setmodlogs\` \`/logs\`
+
+### 👑 Administration
+\`/config\` \`/setup\` \`/resetconfig\`
+\`/case\` \`/cases\`
+
+### 📈 Activity
+\`/activity\` \`/adminactivity\` \`/leaderboard\`
+
+### 📨 Invites
+\`/invites\` \`/inviteleaderboard\`
+
+### 🎭 Roles
+\`/addrole\` \`/removerole\` \`/nickname\`
+
+### ⚙️ Utility
+\`/channelinfo\` \`/renamechannel\` \`/servericon\`
+\`/membercount\` \`/rolelist\` \`/channel-list\`
+\`/remind\` \`/poll\` \`/report\` \`/suggest\`
+
+### 🤖 Bot
+\`/botinfo\` \`/uptime\` \`/stats\`
+\`/reload\` \`/maintenance\``,
+        ephemeral: true
+      });
+    }
+
+
+    // =========================
+    // SERVER INFO
+    // =========================
+
+    if (commandName === "serverinfo") {
+
+      const owner = await guild.fetchOwner();
+
+      return interaction.reply({
+        embeds: [{
+          title: `📊 ${guild.name}`,
+          fields: [
+            {
+              name: "👑 Owner",
+              value: `${owner.user.tag}`,
+              inline: true
+            },
+            {
+              name: "👥 Members",
+              value: `${guild.memberCount}`,
+              inline: true
+            },
+            {
+              name: "🎭 Roles",
+              value: `${guild.roles.cache.size}`,
+              inline: true
+            },
+            {
+              name: "💬 Channels",
+              value: `${guild.channels.cache.size}`,
+              inline: true
+            },
+            {
+              name: "🆔 Server ID",
+              value: guild.id,
+              inline: true
+            }
+          ],
+          timestamp: new Date().toISOString()
+        }]
+      });
+    }
+
+
+    // =========================
+    // USER INFO
+    // =========================
+
+    if (commandName === "userinfo") {
+
+      const user = interaction.options.getUser("user") || interaction.user;
+      const target = await guild.members.fetch(user.id).catch(() => null);
+
+      return interaction.reply({
+        embeds: [{
+          title: `👤 User Information`,
+          thumbnail: {
+            url: user.displayAvatarURL({ size: 1024 })
+          },
+          fields: [
+            {
+              name: "Username",
+              value: user.tag,
+              inline: true
+            },
+            {
+              name: "User ID",
+              value: user.id,
+              inline: true
+            },
+            {
+              name: "Bot",
+              value: user.bot ? "Yes" : "No",
+              inline: true
+            },
+            {
+              name: "Joined Server",
+              value: target
+                ? `<t:${Math.floor(target.joinedTimestamp / 1000)}:F>`
+                : "Unknown",
+              inline: false
+            }
+          ]
+        }]
+      });
+    }
+
+
+    // =========================
+    // AVATAR
+    // =========================
+
+    if (commandName === "avatar") {
+
+      const user = interaction.options.getUser("user") || interaction.user;
+
+      return interaction.reply({
+        embeds: [{
+          title: `${user.username}'s Avatar`,
+          image: {
+            url: user.displayAvatarURL({
+              size: 4096,
+              extension: "png"
+            })
+          }
+        }]
+      });
+    }
+
+
+    // =========================
+    // ROLE INFO
+    // =========================
+
+    if (commandName === "roleinfo") {
+
+      const role = interaction.options.getRole("role");
+
+      return interaction.reply({
+        embeds: [{
+          title: `🎭 ${role.name}`,
+          fields: [
+            {
+              name: "ID",
+              value: role.id,
+              inline: true
+            },
+            {
+              name: "Members",
+              value: `${role.members.size}`,
+              inline: true
+            },
+            {
+              name: "Position",
+              value: `${role.position}`,
+              inline: true
+            },
+            {
+              name: "Mentionable",
+              value: role.mentionable ? "Yes" : "No",
+              inline: true
+            }
+          ]
+        }]
+      });
+    }
+
+
+    // =========================
+    // MEMBER COUNT
+    // =========================
+
+    if (commandName === "membercount") {
+
+      return interaction.reply(
+        `👥 **${guild.name}** currently has **${guild.memberCount} members**.`
+      );
+    }
+
+
+    // =========================
+    // SERVER ICON
+    // =========================
+
+    if (commandName === "servericon") {
+
+      const icon = guild.iconURL({
+        size: 4096,
+        extension: "png"
+      });
+
+      if (!icon) {
+        return interaction.reply({
+          content: "❌ This server doesn't have an icon.",
+          ephemeral: true
+        });
+      }
+
+      return interaction.reply({
+        embeds: [{
+          title: `${guild.name} — Server Icon`,
+          image: {
+            url: icon
+          }
+        }]
+      });
+    }
+
+
+    // =========================
+    // ROLE LIST
+    // =========================
+
+    if (commandName === "rolelist") {
+
+      const roles = guild.roles.cache
+        .filter(role => role.id !== guild.id)
+        .sort((a, b) => b.position - a.position)
+        .map(role => `${role} — ${role.members.size} members`)
+        .slice(0, 50);
+
+      return interaction.reply({
+        content:
+          `🎭 **Server Roles**\n\n${roles.join("\n") || "No roles found."}`,
+        ephemeral: true
+      });
+    }
+
+
+    // =========================
+    // CHANNEL LIST
+    // =========================
+
+    if (commandName === "channel-list") {
+
+      const channels = guild.channels.cache
+        .sort((a, b) => a.rawPosition - b.rawPosition)
+        .map(channel => `• ${channel}`)
+        .slice(0, 100);
+
+      return interaction.reply({
+        content:
+          `📁 **Server Channels**\n\n${channels.join("\n")}`,
+        ephemeral: true
+      });
+    }
+
+
+    // =========================
+    // CHANNEL INFO
+    // =========================
+
+    if (commandName === "channelinfo") {
+
+      const channel = interaction.channel;
+
+      return interaction.reply({
+        embeds: [{
+          title: `📺 Channel Information`,
+          fields: [
+            {
+              name: "Name",
+              value: channel.name,
+              inline: true
+            },
+            {
+              name: "ID",
+              value: channel.id,
+              inline: true
+            },
+            {
+              name: "Type",
+              value: `${channel.type}`,
+              inline: true
+            },
+            {
+              name: "Position",
+              value: `${channel.rawPosition}`,
+              inline: true
+            }
+          ]
+        }]
+      });
+    }
+
+
+    // =========================
+    // NICKNAME
+    // =========================
+
+    if (commandName === "nickname") {
+
+      if (!member.permissions.has("ManageNicknames")) {
+        return interaction.reply({
+          content: "❌ You need **Manage Nicknames** permission.",
+          ephemeral: true
+        });
+      }
+
+      const user = interaction.options.getMember("user");
+      const name = interaction.options.getString("name");
+
+      if (!user) {
+        return interaction.reply({
+          content: "❌ Member not found.",
+          ephemeral: true
+        });
+      }
+
+      if (!user.manageable) {
+        return interaction.reply({
+          content: "❌ I cannot change this member's nickname.",
+          ephemeral: true
+        });
+      }
+
+      await user.setNickname(name);
+
+      return interaction.reply(
+        `✅ Changed ${user}'s nickname to **${name}**.`
+      );
+    }
+
+
+    // =========================
+    // RENAME CHANNEL
+    // =========================
+
+    if (commandName === "renamechannel") {
+
+      if (!member.permissions.has("ManageChannels")) {
+        return interaction.reply({
+          content: "❌ You need **Manage Channels** permission.",
+          ephemeral: true
+        });
+      }
+
+      const name = interaction.options.getString("name");
+
+      await interaction.channel.setName(name);
+
+      return interaction.reply(
+        `✅ Channel renamed to **${name}**.`
+      );
+    }
+
+
+    // =========================
+    // SLOWMODE
+    // =========================
+
+    if (commandName === "slowmode") {
+
+      if (!member.permissions.has("ManageChannels")) {
+        return interaction.reply({
+          content: "❌ You need **Manage Channels** permission.",
+          ephemeral: true
+        });
+      }
+
+      const seconds = interaction.options.getInteger("seconds");
+
+      await interaction.channel.setRateLimitPerUser(seconds);
+
+      return interaction.reply(
+        seconds === 0
+          ? "✅ Slowmode disabled."
+          : `✅ Slowmode set to **${seconds} seconds**.`
+      );
+    }
+
+
+    // =========================
+    // CLEAR MESSAGES
+    // =========================
+
+    if (commandName === "clear") {
+
+      if (!member.permissions.has("ManageMessages")) {
+        return interaction.reply({
+          content: "❌ You need **Manage Messages** permission.",
+          ephemeral: true
+        });
+      }
+
+      const amount = interaction.options.getInteger("amount");
+
+      const deleted = await interaction.channel.bulkDelete(
+        amount,
+        true
+      );
+
+      return interaction.reply({
+        content: `🧹 Deleted **${deleted.size} messages**.`,
+        ephemeral: true
+      });
+    }
+
+
+    // =========================
+    // LOCK CHANNEL
+    // =========================
+
+    if (commandName === "lock") {
+
+      if (!member.permissions.has("ManageChannels")) {
+        return interaction.reply({
+          content: "❌ You need **Manage Channels** permission.",
+          ephemeral: true
+        });
+      }
+
+      await interaction.channel.permissionOverwrites.edit(
+        guild.roles.everyone,
+        {
+          SendMessages: false
+        }
+      );
+
+      return interaction.reply("🔒 Channel locked.");
+    }
+
+
+    // =========================
+    // UNLOCK CHANNEL
+    // =========================
+
+    if (commandName === "unlock") {
+
+      if (!member.permissions.has("ManageChannels")) {
+        return interaction.reply({
+          content: "❌ You need **Manage Channels** permission.",
+          ephemeral: true
+        });
+      }
+
+      await interaction.channel.permissionOverwrites.edit(
+        guild.roles.everyone,
+        {
+          SendMessages: null
+        }
+      );
+
+      return interaction.reply("🔓 Channel unlocked.");
+    }
+
+
+    // =========================
+    // ADD ROLE
+    // =========================
+
+    if (commandName === "addrole") {
+
+      if (!member.permissions.has("ManageRoles")) {
+        return interaction.reply({
+          content: "❌ You need **Manage Roles** permission.",
+          ephemeral: true
+        });
+      }
+
+      const user = interaction.options.getMember("user");
+      const role = interaction.options.getRole("role");
+
+      if (!user) {
+        return interaction.reply({
+          content: "❌ Member not found.",
+          ephemeral: true
+        });
+      }
+
+      if (role.position >= member.roles.highest.position) {
+        return interaction.reply({
+          content: "❌ You cannot manage this role.",
+          ephemeral: true
+        });
+      }
+
+      if (role.position >= guild.members.me.roles.highest.position) {
+        return interaction.reply({
+          content: "❌ My highest role is below this role.",
+          ephemeral: true
+        });
+      }
+
+      await user.roles.add(role);
+
+      return interaction.reply(
+        `✅ Added ${role} to **${user.user.tag}**.`
+      );
+    }
+
+
+    // =========================
+    // REMOVE ROLE
+    // =========================
+
+    if (commandName === "removerole") {
+
+      if (!member.permissions.has("ManageRoles")) {
+        return interaction.reply({
+          content: "❌ You need **Manage Roles** permission.",
+          ephemeral: true
+        });
+      }
+
+      const user = interaction.options.getMember("user");
+      const role = interaction.options.getRole("role");
+
+      if (!user) {
+        return interaction.reply({
+          content: "❌ Member not found.",
+          ephemeral: true
+        });
+      }
+
+      if (role.position >= member.roles.highest.position) {
+        return interaction.reply({
+          content: "❌ You cannot manage this role.",
+          ephemeral: true
+        });
+      }
+
+      await user.roles.remove(role);
+
+      return interaction.reply(
+        `✅ Removed ${role} from **${user.user.tag}**.`
+      );
+    }
+
+
+    // =========================
+    // BOT INFO
+    // =========================
+
+    if (commandName === "botinfo") {
+
+      return interaction.reply({
+        embeds: [{
+          title: "🤖 Bot Information",
+          fields: [
+            {
+              name: "Bot",
+              value: client.user.tag,
+              inline: true
+            },
+            {
+              name: "Servers",
+              value: `${client.guilds.cache.size}`,
+              inline: true
+            },
+            {
+              name: "Users",
+              value: `${client.guilds.cache.reduce(
+                (total, g) => total + g.memberCount,
+                0
+              )}`,
+              inline: true
+            },
+            {
+              name: "Discord.js",
+              value: require("discord.js").version,
+              inline: true
+            }
+          ]
+        }]
+      });
+    }
+
+
+    // =========================
+    // UPTIME
+    // =========================
+
+    if (commandName === "uptime") {
+
+      const totalSeconds = Math.floor(client.uptime / 1000);
+
+      const days = Math.floor(totalSeconds / 86400);
+      const hours = Math.floor((totalSeconds % 86400) / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+
+      return interaction.reply(
+        `⏱️ **Bot Uptime**\n${days}d ${hours}h ${minutes}m ${seconds}s`
+      );
+    }
+
+
+    // =========================
+    // STATS
+    // =========================
+
+    if (commandName === "stats") {
+
+      const guildCount = client.guilds.cache.size;
+
+      const userCount = client.guilds.cache.reduce(
+        (total, g) => total + g.memberCount,
+        0
+      );
+
+      return interaction.reply({
+        embeds: [{
+          title: "📊 Bot Statistics",
+          fields: [
+            {
+              name: "Servers",
+              value: `${guildCount}`,
+              inline: true
+            },
+            {
+              name: "Users",
+              value: `${userCount}`,
+              inline: true
+            },
+            {
+              name: "Commands",
+              value: `${commands.length}`,
+              inline: true
+            }
+          ]
+        }]
+      });
+    }
+
+
+    // =========================
+    // UNKNOWN COMMAND
+    // =========================
+
+    return interaction.reply({
+      content: "❌ This command has not been configured yet.",
+      ephemeral: true
+    });
+
+  } catch (error) {
+
+    console.error(
+      `❌ Error in /${commandName}:`,
+      error
+    );
+
+    if (interaction.replied || interaction.deferred) {
+
+      await interaction.followUp({
+        content: "❌ An unexpected error occurred while executing this command.",
+        ephemeral: true
+      }).catch(() => {});
+
+    } else {
+
+      await interaction.reply({
+        content: "❌ An unexpected error occurred while executing this command.",
+        ephemeral: true
+      }).catch(() => {});
+    }
+  }
+
+});
