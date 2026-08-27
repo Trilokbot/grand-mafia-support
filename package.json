@@ -1,16 +1,17 @@
 {
-  "name": "grand-mafia-support-bot",
-  "version": "3.0.0",
-  "description": "Grand Mafia Support, Ticket, Moderation, AutoMod and Security Bot",
+  "name": "grand-mafia-discord-bot",
+  "version": "1.0.0",
+  "description": "Grand Mafia RP Discord Management Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "engines": {
-    "node": "22.x"
+    "node": ">=18.17.0"
   },
   "dependencies": {
     "discord.js": "^14.25.1",
-    "pg": "^8.16.3"
+    "dotenv": "^17.2.2",
+    "mongoose": "^8.18.0"
   }
 }
