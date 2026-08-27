@@ -3136,3 +3136,364 @@ client.on("messageCreate", async message => {
   }
 
 });
+
+
+// ============================================================
+// PART 9 — SECURITY + VERIFICATION + AUTO ROLE
+// ============================================================
+
+const securityCache = new Map();
+const verificationCache = new Map();
+const autoRoleCache = new Map();
+
+async function ensureSecurityTable() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS security_config (
+        guild_id VARCHAR(30) PRIMARY KEY,
+        enabled BOOLEAN DEFAULT FALSE,
+        verification_enabled BOOLEAN DEFAULT FALSE,
+        verification_role_id VARCHAR(30),
+        autorole_id VARCHAR(30),
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+  } catch (error) {
+    console.error("❌ Security table error:", error.message);
+  }
+}
+
+async function getSecurityConfig(guildId) {
+  if (securityCache.has(guildId)) {
+    return securityCache.get(guildId);
+  }
+
+  const result = await pool.query(
+    `SELECT * FROM security_config WHERE guild_id = $1`,
+    [guildId]
+  );
+
+  if (result.rows.length === 0) {
+    const created = await pool.query(
+      `INSERT INTO security_config (guild_id)
+       VALUES ($1)
+       RETURNING *`,
+      [guildId]
+    );
+
+    securityCache.set(guildId, created.rows[0]);
+    return created.rows[0];
+  }
+
+  securityCache.set(guildId, result.rows[0]);
+  return result.rows[0];
+}
+
+async function updateSecurityConfig(guildId, data) {
+  const current = await getSecurityConfig(guildId);
+
+  const updated = {
+    enabled:
+      data.enabled !== undefined ? data.enabled : current.enabled,
+
+    verification_enabled:
+      data.verification_enabled !== undefined
+        ? data.verification_enabled
+        : current.verification_enabled,
+
+    verification_role_id:
+      data.verification_role_id !== undefined
+        ? data.verification_role_id
+        : current.verification_role_id,
+
+    autorole_id:
+      data.autorole_id !== undefined
+        ? data.autorole_id
+        : current.autorole_id
+  };
+
+  const result = await pool.query(
+    `UPDATE security_config
+     SET enabled = $1,
+         verification_enabled = $2,
+         verification_role_id = $3,
+         autorole_id = $4,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE guild_id = $5
+     RETURNING *`,
+    [
+      updated.enabled,
+      updated.verification_enabled,
+      updated.verification_role_id,
+      updated.autorole_id,
+      guildId
+    ]
+  );
+
+  securityCache.set(guildId, result.rows[0]);
+
+  return result.rows[0];
+}
+
+
+// ============================================================
+// SECURITY COMMAND
+// ============================================================
+
+async function handleSecurityCommand(interaction) {
+  if (!interaction.memberPermissions?.has("Administrator")) {
+    return interaction.reply({
+      content: "❌ You need **Administrator** permission to use this command.",
+      ephemeral: true
+    });
+  }
+
+  const enabled = interaction.options.getBoolean("enabled");
+
+  const config = await updateSecurityConfig(
+    interaction.guild.id,
+    { enabled }
+  );
+
+  return interaction.reply({
+    content:
+      `🛡️ **Security System ${config.enabled ? "Enabled" : "Disabled"}**\n\n` +
+      `Server security protection is now **${config.enabled ? "ON" : "OFF"}**.`,
+    ephemeral: true
+  });
+}
+
+
+// ============================================================
+// VERIFICATION COMMAND
+// ============================================================
+
+async function handleVerificationCommand(interaction) {
+  if (!interaction.memberPermissions?.has("Administrator")) {
+    return interaction.reply({
+      content: "❌ You need **Administrator** permission to use this command.",
+      ephemeral: true
+    });
+  }
+
+  const enabled = interaction.options.getBoolean("enabled");
+
+  const config = await updateSecurityConfig(
+    interaction.guild.id,
+    { verification_enabled: enabled }
+  );
+
+  return interaction.reply({
+    content:
+      `✅ **Verification System ${enabled ? "Enabled" : "Disabled"}**\n\n` +
+      `New members will ${enabled ? "require verification." : "not require verification."}`,
+    ephemeral: true
+  });
+}
+
+
+// ============================================================
+// AUTOROLE COMMAND
+// ============================================================
+
+async function handleAutoroleCommand(interaction) {
+  if (!interaction.memberPermissions?.has("ManageGuild")) {
+    return interaction.reply({
+      content: "❌ You need **Manage Server** permission.",
+      ephemeral: true
+    });
+  }
+
+  const role = interaction.options.getRole("role");
+
+  if (!role) {
+    return interaction.reply({
+      content: "❌ Invalid role.",
+      ephemeral: true
+    });
+  }
+
+  if (role.managed) {
+    return interaction.reply({
+      content: "❌ Managed/integration roles cannot be used as autoroles.",
+      ephemeral: true
+    });
+  }
+
+  const botMember = interaction.guild.members.me;
+
+  if (!botMember) {
+    return interaction.reply({
+      content: "❌ I could not find my bot member.",
+      ephemeral: true
+    });
+  }
+
+  if (role.position >= botMember.roles.highest.position) {
+    return interaction.reply({
+      content:
+        "❌ I cannot assign this role because it is higher than or equal to my highest role.",
+      ephemeral: true
+    });
+  }
+
+  await updateSecurityConfig(
+    interaction.guild.id,
+    { autorole_id: role.id }
+  );
+
+  autoRoleCache.set(interaction.guild.id, role.id);
+
+  return interaction.reply({
+    content:
+      `✅ **Auto Role Configured**\n\n` +
+      `New members will receive ${role}.`,
+    ephemeral: true
+  });
+}
+
+
+// ============================================================
+// MEMBER JOIN SECURITY
+// ============================================================
+
+client.on("guildMemberAdd", async (member) => {
+  try {
+    if (member.user.bot) return;
+
+    const config = await getSecurityConfig(member.guild.id);
+
+    // --------------------------------------------------------
+    // AUTO ROLE
+    // --------------------------------------------------------
+
+    if (config.autorole_id) {
+      const role = member.guild.roles.cache.get(config.autorole_id);
+
+      if (role) {
+        const botMember = member.guild.members.me;
+
+        if (
+          botMember &&
+          !role.managed &&
+          role.position < botMember.roles.highest.position
+        ) {
+          await member.roles.add(
+            role,
+            "Automatic member role"
+          ).catch(() => {});
+        }
+      }
+    }
+
+    // --------------------------------------------------------
+    // VERIFICATION
+    // --------------------------------------------------------
+
+    if (
+      config.verification_enabled &&
+      config.verification_role_id
+    ) {
+      const verificationRole =
+        member.guild.roles.cache.get(
+          config.verification_role_id
+        );
+
+      if (verificationRole) {
+        await member.roles.add(
+          verificationRole,
+          "Verification system"
+        ).catch(() => {});
+      }
+    }
+
+    // --------------------------------------------------------
+    // SECURITY ACCOUNT CHECK
+    // --------------------------------------------------------
+
+    if (config.enabled) {
+      const accountAge =
+        Date.now() - member.user.createdTimestamp;
+
+      const oneDay =
+        24 * 60 * 60 * 1000;
+
+      // Very new account detection
+      if (accountAge < oneDay) {
+        console.log(
+          `⚠️ New account joined: ${member.user.tag} (${member.id})`
+        );
+      }
+    }
+
+  } catch (error) {
+    console.error(
+      "❌ Guild member security error:",
+      error.message
+    );
+  }
+});
+
+
+// ============================================================
+// SECURITY STATUS HELPER
+// ============================================================
+
+async function securityStatus(guildId) {
+  const config = await getSecurityConfig(guildId);
+
+  return {
+    security: Boolean(config.enabled),
+    verification: Boolean(config.verification_enabled),
+    autorole: config.autorole_id || null
+  };
+}
+
+
+// ============================================================
+// COMMAND ROUTER — PART 9
+// ============================================================
+
+// IMPORTANT:
+// Add these cases INSIDE your existing interactionCreate
+// command switch/router.
+// Do NOT create another client.on("interactionCreate")
+// if Part 4/5 already has one.
+
+async function handlePart9Commands(interaction) {
+  if (!interaction.isChatInputCommand()) return false;
+
+  switch (interaction.commandName) {
+
+    case "security":
+      await handleSecurityCommand(interaction);
+      return true;
+
+    case "verification":
+      await handleVerificationCommand(interaction);
+      return true;
+
+    case "autorole":
+      await handleAutoroleCommand(interaction);
+      return true;
+
+    default:
+      return false;
+  }
+}
+
+
+// ============================================================
+// INITIALIZE PART 9
+// ============================================================
+
+ensureSecurityTable()
+  .then(() => {
+    console.log("✅ Part 9 Security system initialized.");
+  })
+  .catch(error => {
+    console.error(
+      "❌ Part 9 initialization failed:",
+      error.message
+    );
+  });
