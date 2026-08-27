@@ -2635,3 +2635,504 @@ if (interaction.isButton()) {
     );
   }
 }
+
+
+// =========================
+// PART 8 — AUTOMOD SYSTEM
+// =========================
+
+const automodConfig = new Map();
+const spamTracker = new Map();
+const warnedUsers = new Map();
+
+const DEFAULT_AUTOMOD = {
+  automod: false,
+  antispam: false,
+  antilink: false,
+  antimention: false,
+  autotimeout: false,
+  filteredWords: []
+};
+
+function getAutomodConfig(guildId) {
+  if (!automodConfig.has(guildId)) {
+    automodConfig.set(guildId, {
+      ...DEFAULT_AUTOMOD,
+      filteredWords: []
+    });
+  }
+
+  return automodConfig.get(guildId);
+}
+
+function getUserSpamData(guildId, userId) {
+  const key = `${guildId}:${userId}`;
+
+  if (!spamTracker.has(key)) {
+    spamTracker.set(key, {
+      messages: [],
+      warnings: 0,
+      lastAction: 0
+    });
+  }
+
+  return spamTracker.get(key);
+}
+
+function containsLink(content) {
+  return /(https?:\/\/|www\.|discord\.gg\/|discord\.com\/invite\/)/i.test(
+    content
+  );
+}
+
+function containsMassMention(message) {
+  const everyone =
+    message.mentions.everyone === true;
+
+  const users =
+    message.mentions.users?.size || 0;
+
+  return everyone || users >= 5;
+}
+
+function containsFilteredWord(content, words) {
+  const text = content.toLowerCase();
+
+  return words.find(word =>
+    text.includes(word.toLowerCase())
+  );
+    }
+
+
+// =========================
+// /automod
+// =========================
+
+if (commandName === "automod") {
+
+  if (
+    !interaction.member.permissions.has(
+      PermissionFlagsBits.ManageGuild
+    )
+  ) {
+    return interaction.reply({
+      content: "❌ You need **Manage Server** permission.",
+      ephemeral: true
+    });
+  }
+
+  const enabled =
+    interaction.options.getBoolean("enabled");
+
+  const config =
+    getAutomodConfig(interaction.guild.id);
+
+  config.automod = enabled;
+
+  return interaction.reply({
+    content:
+      enabled
+        ? "✅ **AutoMod enabled.**"
+        : "🔴 **AutoMod disabled.**",
+    ephemeral: true
+  });
+}
+
+
+// =========================
+// /antispam
+// =========================
+
+if (commandName === "antispam") {
+
+  if (
+    !interaction.member.permissions.has(
+      PermissionFlagsBits.ManageGuild
+    )
+  ) {
+    return interaction.reply({
+      content: "❌ You need **Manage Server** permission.",
+      ephemeral: true
+    });
+  }
+
+  const enabled =
+    interaction.options.getBoolean("enabled");
+
+  const config =
+    getAutomodConfig(interaction.guild.id);
+
+  config.antispam = enabled;
+
+  return interaction.reply({
+    content:
+      enabled
+        ? "✅ **Anti-Spam enabled.**"
+        : "🔴 **Anti-Spam disabled.**",
+    ephemeral: true
+  });
+}
+
+
+// =========================
+// /antilink
+// =========================
+
+if (commandName === "antilink") {
+
+  if (
+    !interaction.member.permissions.has(
+      PermissionFlagsBits.ManageGuild
+    )
+  ) {
+    return interaction.reply({
+      content: "❌ You need **Manage Server** permission.",
+      ephemeral: true
+    });
+  }
+
+  const enabled =
+    interaction.options.getBoolean("enabled");
+
+  const config =
+    getAutomodConfig(interaction.guild.id);
+
+  config.antilink = enabled;
+
+  return interaction.reply({
+    content:
+      enabled
+        ? "✅ **Anti-Link enabled.**"
+        : "🔴 **Anti-Link disabled.**",
+    ephemeral: true
+  });
+}
+
+
+// =========================
+// /antimention
+// =========================
+
+if (commandName === "antimention") {
+
+  if (
+    !interaction.member.permissions.has(
+      PermissionFlagsBits.ManageGuild
+    )
+  ) {
+    return interaction.reply({
+      content: "❌ You need **Manage Server** permission.",
+      ephemeral: true
+    });
+  }
+
+  const enabled =
+    interaction.options.getBoolean("enabled");
+
+  const config =
+    getAutomodConfig(interaction.guild.id);
+
+  config.antimention = enabled;
+
+  return interaction.reply({
+    content:
+      enabled
+        ? "✅ **Anti-Mass-Mention enabled.**"
+        : "🔴 **Anti-Mass-Mention disabled.**",
+    ephemeral: true
+  });
+}
+
+
+// =========================
+// /autotimeout
+// =========================
+
+if (commandName === "autotimeout") {
+
+  if (
+    !interaction.member.permissions.has(
+      PermissionFlagsBits.ModerateMembers
+    )
+  ) {
+    return interaction.reply({
+      content: "❌ You need **Moderate Members** permission.",
+      ephemeral: true
+    });
+  }
+
+  const enabled =
+    interaction.options.getBoolean("enabled");
+
+  const config =
+    getAutomodConfig(interaction.guild.id);
+
+  config.autotimeout = enabled;
+
+  return interaction.reply({
+    content:
+      enabled
+        ? "✅ **Automatic Timeout enabled.**"
+        : "🔴 **Automatic Timeout disabled.**",
+    ephemeral: true
+  });
+}
+
+
+// =========================
+// /filter
+// =========================
+
+if (commandName === "filter") {
+
+  if (
+    !interaction.member.permissions.has(
+      PermissionFlagsBits.ManageGuild
+    )
+  ) {
+    return interaction.reply({
+      content: "❌ You need **Manage Server** permission.",
+      ephemeral: true
+    });
+  }
+
+  const action =
+    interaction.options.getString("action");
+
+  const word =
+    interaction.options
+      .getString("word")
+      .trim()
+      .toLowerCase();
+
+  const config =
+    getAutomodConfig(interaction.guild.id);
+
+  if (action === "add") {
+
+    if (config.filteredWords.includes(word)) {
+      return interaction.reply({
+        content: "⚠️ That word is already filtered.",
+        ephemeral: true
+      });
+    }
+
+    config.filteredWords.push(word);
+
+    return interaction.reply({
+      content: `✅ Added \`${word}\` to the AutoMod filter.`,
+      ephemeral: true
+    });
+  }
+
+  if (action === "remove") {
+
+    const index =
+      config.filteredWords.indexOf(word);
+
+    if (index === -1) {
+      return interaction.reply({
+        content: "❌ That word is not in the filter.",
+        ephemeral: true
+      });
+    }
+
+    config.filteredWords.splice(index, 1);
+
+    return interaction.reply({
+      content: `✅ Removed \`${word}\` from the AutoMod filter.`,
+      ephemeral: true
+    });
+  }
+      }
+
+// =========================
+// AUTOMOD MESSAGE HANDLER
+// =========================
+
+client.on("messageCreate", async message => {
+
+  try {
+
+    if (!message.guild) return;
+
+    if (message.author.bot) return;
+
+    const config =
+      getAutomodConfig(message.guild.id);
+
+    // AutoMod completely disabled
+    if (!config.automod) return;
+
+    const member = message.member;
+
+    if (!member) return;
+
+    // Ignore administrators
+    if (
+      member.permissions.has(
+        PermissionFlagsBits.Administrator
+      )
+    ) {
+      return;
+    }
+
+    // =========================
+    // FILTERED WORDS
+    // =========================
+
+    const filteredWord =
+      containsFilteredWord(
+        message.content,
+        config.filteredWords
+      );
+
+    if (filteredWord) {
+
+      await message.delete().catch(() => {});
+
+      await message.channel.send({
+        content:
+          `⚠️ ${message.author}, your message was removed because it contained a prohibited word.`
+      }).then(msg => {
+        setTimeout(() => {
+          msg.delete().catch(() => {});
+        }, 5000);
+      }).catch(() => {});
+
+      return;
+    }
+
+    // =========================
+    // ANTI-LINK
+    // =========================
+
+    if (
+      config.antilink &&
+      containsLink(message.content)
+    ) {
+
+      await message.delete().catch(() => {});
+
+      await message.channel.send({
+        content:
+          `🔗 ${message.author}, links are not allowed here.`
+      }).then(msg => {
+        setTimeout(() => {
+          msg.delete().catch(() => {});
+        }, 5000);
+      }).catch(() => {});
+
+      return;
+    }
+
+    // =========================
+    // ANTI-MASS-MENTION
+    // =========================
+
+    if (
+      config.antimention &&
+      containsMassMention(message)
+    ) {
+
+      await message.delete().catch(() => {});
+
+      if (
+        config.autotimeout &&
+        member.moderatable
+      ) {
+
+        await member.timeout(
+          5 * 60 * 1000,
+          "AutoMod: mass mention"
+        ).catch(() => {});
+      }
+
+      await message.channel.send({
+        content:
+          `🚨 ${message.author}, mass mentions are not allowed.`
+      }).then(msg => {
+        setTimeout(() => {
+          msg.delete().catch(() => {});
+        }, 5000);
+      }).catch(() => {});
+
+      return;
+    }
+
+    // =========================
+    // ANTI-SPAM
+    // =========================
+
+    if (config.antispam) {
+
+      const data =
+        getUserSpamData(
+          message.guild.id,
+          message.author.id
+        );
+
+      const now = Date.now();
+
+      data.messages =
+        data.messages.filter(
+          timestamp => now - timestamp < 5000
+        );
+
+      data.messages.push(now);
+
+      // More than 6 messages in 5 seconds
+      if (data.messages.length >= 6) {
+
+        data.messages = [];
+
+        await message.delete().catch(() => {});
+
+        if (
+          config.autotimeout &&
+          member.moderatable &&
+          now - data.lastAction > 10000
+        ) {
+
+          data.lastAction = now;
+
+          await member.timeout(
+            5 * 60 * 1000,
+            "AutoMod: spam"
+          ).catch(() => {});
+
+          await message.channel.send({
+            content:
+              `⏳ ${message.author} has been automatically timed out for spam.`
+          }).then(msg => {
+            setTimeout(() => {
+              msg.delete().catch(() => {});
+            }, 5000);
+          }).catch(() => {});
+
+        } else {
+
+          await message.channel.send({
+            content:
+              `⚠️ ${message.author}, please slow down. Spam is not allowed.`
+          }).then(msg => {
+            setTimeout(() => {
+              msg.delete().catch(() => {});
+            }, 5000);
+          }).catch(() => {});
+        }
+
+        return;
+      }
+    }
+
+  } catch (error) {
+
+    console.error(
+      "❌ AutoMod error:",
+      error
+    );
+
+  }
+
+});
