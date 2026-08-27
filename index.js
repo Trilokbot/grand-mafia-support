@@ -5027,3 +5027,108 @@ async function handlePart12Commands(interaction) {
 }
 
 console.log("✅ Part 12 Role & Channel Management loaded.");
+
+// =========================
+// PART 13 — ERROR HANDLING & SAFE GUARDS
+// =========================
+
+process.on("unhandledRejection", error => {
+  console.error("❌ Unhandled Promise Rejection:");
+  console.error(error);
+});
+
+process.on("uncaughtException", error => {
+  console.error("❌ Uncaught Exception:");
+  console.error(error);
+});
+
+process.on("uncaughtExceptionMonitor", error => {
+  console.error("⚠️ Uncaught Exception Monitor:");
+  console.error(error);
+});
+
+// Discord API errors
+client.on("error", error => {
+  console.error("❌ Discord Client Error:");
+  console.error(error);
+});
+
+// Discord warnings
+client.on("warn", warning => {
+  console.warn("⚠️ Discord Warning:", warning);
+});
+
+// Interaction safety handler
+client.on("interactionCreate", async interaction => {
+  try {
+    if (!interaction.isChatInputCommand()) return;
+
+    // Prevent commands from running while maintenance mode is enabled
+    if (
+      global.maintenanceMode === true &&
+      interaction.commandName !== "maintenance" &&
+      interaction.commandName !== "botinfo"
+    ) {
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({
+          content: "🛠️ The bot is currently in maintenance mode.",
+          ephemeral: true
+        });
+      }
+
+      return;
+    }
+
+  } catch (error) {
+    console.error("❌ Interaction safety error:");
+    console.error(error);
+
+    try {
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({
+          content: "❌ An unexpected error occurred.",
+          ephemeral: true
+        });
+      } else {
+        await interaction.reply({
+          content: "❌ An unexpected error occurred.",
+          ephemeral: true
+        });
+      }
+    } catch {}
+  }
+});
+
+// Prevent crashes caused by destroyed/invalid guilds
+client.on("guildDelete", guild => {
+  console.log(`📤 Bot removed from server: ${guild.name} (${guild.id})`);
+});
+
+// Log when bot joins a new server
+client.on("guildCreate", guild => {
+  console.log(`📥 Bot joined server: ${guild.name} (${guild.id})`);
+});
+
+// Safe shutdown
+async function shutdown(signal) {
+  console.log(`\n⚠️ ${signal} received. Shutting down safely...`);
+
+  try {
+    if (client) {
+      client.destroy();
+    }
+
+    console.log("✅ Bot shutdown completed.");
+    process.exit(0);
+
+  } catch (error) {
+    console.error("❌ Shutdown error:");
+    console.error(error);
+    process.exit(1);
+  }
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+console.log("✅ Part 13 loaded — error handling and safety guards active.");
