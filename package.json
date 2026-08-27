@@ -1,13 +1,14 @@
 {
-  "name": "grand-mafia-dm-support",
-  "version": "1.0.0",
-  "description": "Grand Mafia RP DM Support Bot",
+  "name": "grand-mafia-support",
+  "version": "2.0.0",
+  "description": "Grand Mafia RP Support and Moderation Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "discord.js": "^14.25.1",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "pg": "^8.16.3"
   }
 }
