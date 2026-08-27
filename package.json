@@ -1,7 +1,7 @@
 {
   "name": "grand-mafia-support-bot",
-  "version": "2.0.0",
-  "description": "Grand Mafia Support, Ticket, Moderation and Security Bot",
+  "version": "3.0.0",
+  "description": "Grand Mafia Support, Ticket, Moderation, AutoMod and Security Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
