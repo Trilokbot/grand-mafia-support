@@ -1,293 +1,372 @@
-require("dotenv").config();
-
-const fs = require("fs");
-const path = require("path");
+"use strict";
 
 const {
-    Client,
-    GatewayIntentBits,
-    Partials,
-    PermissionsBitField,
-    ChannelType,
-    EmbedBuilder,
-    ActionRowBuilder,
-    ButtonBuilder,
-    ButtonStyle,
-    SlashCommandBuilder,
-    REST,
-    Routes
+  Client,
+  GatewayIntentBits,
+  Partials,
+  PermissionsBitField,
+  ChannelType,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  EmbedBuilder,
+  SlashCommandBuilder,
+  REST,
+  Routes,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  StringSelectMenuBuilder
 } = require("discord.js");
 
+const { Pool } = require("pg");
+
 /* =========================================================
-   CONFIGURATION
+   CONFIG
 ========================================================= */
 
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
-
-/*
-   YOUR IDs
-*/
+const DATABASE_URL = process.env.DATABASE_URL;
 
 const SERVER_ID = "1493700265499689154";
-
 const SUPPORT_ADMIN_ROLE_ID = "1542498406981959801";
-
 const SUPPORT_LOG_CHANNEL_ID = "1542500573000106024";
 
+if (!TOKEN || !CLIENT_ID || !DATABASE_URL) {
+  console.error("❌ TOKEN, CLIENT_ID or DATABASE_URL is missing.");
+  process.exit(1);
+}
+
 /* =========================================================
-   CLIENT
+   DISCORD CLIENT
 ========================================================= */
 
 const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMembers,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildModeration,
-        GatewayIntentBits.GuildPresences
-    ],
-
-    partials: [
-        Partials.Channel,
-        Partials.Message,
-        Partials.GuildMember
-    ]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.DirectMessageReactions
+  ],
+  partials: [
+    Partials.Channel,
+    Partials.Message,
+    Partials.User
+  ]
 });
 
 /* =========================================================
-   DATA STORAGE
+   DATABASE
 ========================================================= */
 
-const DATA_DIR = path.join(__dirname, "data");
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: DATABASE_URL.includes("localhost")
+    ? false
+    : { rejectUnauthorized: false }
+});
 
-if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR);
+async function db(query, params = []) {
+  return pool.query(query, params);
 }
 
-const DATA_FILE = path.join(DATA_DIR, "data.json");
+async function initDatabase() {
+  await db(`
+    CREATE TABLE IF NOT EXISTS tickets (
+      id SERIAL PRIMARY KEY,
+      user_id VARCHAR(30) NOT NULL,
+      guild_id VARCHAR(30) NOT NULL,
+      channel_id VARCHAR(30),
+      status VARCHAR(20) DEFAULT 'open',
+      claimed_by VARCHAR(30),
+      transferred_to VARCHAR(30),
+      held BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW(),
+      closed_at TIMESTAMP
+    )
+  `);
 
-let database = {
-    warnings: {},
-    autorole: {},
-    verifyRole: {},
-    tickets: {},
-    settings: {}
-};
+  await db(`
+    CREATE TABLE IF NOT EXISTS ticket_messages (
+      id SERIAL PRIMARY KEY,
+      ticket_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
+      user_id VARCHAR(30),
+      staff_id VARCHAR(30),
+      direction VARCHAR(20),
+      content TEXT,
+      attachment_urls TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
 
-function loadDatabase() {
-    try {
-        if (!fs.existsSync(DATA_FILE)) {
-            saveDatabase();
-            return;
-        }
+  await db(`
+    CREATE TABLE IF NOT EXISTS ticket_notes (
+      id SERIAL PRIMARY KEY,
+      ticket_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
+      staff_id VARCHAR(30),
+      note TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
 
-        const data = fs.readFileSync(DATA_FILE, "utf8");
+  await db(`
+    CREATE TABLE IF NOT EXISTS warnings (
+      id SERIAL PRIMARY KEY,
+      guild_id VARCHAR(30),
+      user_id VARCHAR(30),
+      moderator_id VARCHAR(30),
+      reason TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
 
-        if (data.trim()) {
-            database = {
-                ...database,
-                ...JSON.parse(data)
-            };
-        }
-    } catch (error) {
-        console.error("Database load error:", error);
-    }
+  await db(`
+    CREATE TABLE IF NOT EXISTS modlogs (
+      id SERIAL PRIMARY KEY,
+      guild_id VARCHAR(30),
+      user_id VARCHAR(30),
+      moderator_id VARCHAR(30),
+      action VARCHAR(50),
+      reason TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  await db(`
+    CREATE TABLE IF NOT EXISTS blocked_users (
+      guild_id VARCHAR(30),
+      user_id VARCHAR(30),
+      blocked_by VARCHAR(30),
+      reason TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      PRIMARY KEY(guild_id, user_id)
+    )
+  `);
+
+  await db(`
+    CREATE TABLE IF NOT EXISTS settings (
+      guild_id VARCHAR(30) PRIMARY KEY,
+      automod BOOLEAN DEFAULT TRUE,
+      spam BOOLEAN DEFAULT TRUE,
+      links BOOLEAN DEFAULT TRUE,
+      invites BOOLEAN DEFAULT TRUE,
+      mentions BOOLEAN DEFAULT TRUE,
+      badwords BOOLEAN DEFAULT TRUE,
+      auto_timeout BOOLEAN DEFAULT TRUE,
+      inactivity_hours INTEGER DEFAULT 48,
+      ticket_category VARCHAR(30),
+      ticket_log_channel VARCHAR(30)
+    )
+  `);
+
+  await db(`
+    INSERT INTO settings (guild_id)
+    VALUES ($1)
+    ON CONFLICT (guild_id) DO NOTHING
+  `, [SERVER_ID]);
+
+  console.log("✅ PostgreSQL database ready.");
 }
-
-function saveDatabase() {
-    try {
-        fs.writeFileSync(
-            DATA_FILE,
-            JSON.stringify(database, null, 2)
-        );
-    } catch (error) {
-        console.error("Database save error:", error);
-    }
-}
-
-loadDatabase();
-
-/* =========================================================
-   MEMORY
-========================================================= */
-
-const spamTracker = new Map();
-const cooldowns = new Map();
-const joinTracker = new Map();
 
 /* =========================================================
    HELPERS
 ========================================================= */
 
-function isOwner(member) {
-    return member.id === member.guild.ownerId;
+function isStaff(member) {
+  return member?.roles?.cache?.has(SUPPORT_ADMIN_ROLE_ID) ||
+    member?.permissions?.has(PermissionsBitField.Flags.Administrator);
 }
 
-function isSupportAdmin(member) {
-    if (!member) return false;
-
-    if (isOwner(member)) return true;
-
-    if (
-        member.permissions.has(
-            PermissionsBitField.Flags.Administrator
-        )
-    ) {
-        return true;
-    }
-
-    return member.roles.cache.has(
-        SUPPORT_ADMIN_ROLE_ID
-    );
-}
-
-function hasPermission(member, permission) {
-    if (!member) return false;
-
-    if (isOwner(member)) return true;
-
-    if (
-        member.permissions.has(
-            PermissionsBitField.Flags.Administrator
-        )
-    ) {
-        return true;
-    }
-
-    if (
-        member.permissions.has(permission)
-    ) {
-        return true;
-    }
-
-    if (
-        member.roles.cache.has(
-            SUPPORT_ADMIN_ROLE_ID
-        )
-    ) {
-        return true;
-    }
-
+function staffOnly(interaction) {
+  if (!interaction.member || !isStaff(interaction.member)) {
     return false;
+  }
+  return true;
 }
 
-function getLogChannel(guild) {
-    return guild.channels.cache.get(
-        SUPPORT_LOG_CHANNEL_ID
-    );
-}
-
-async function sendLog(guild, title, description) {
-    try {
-        const channel = getLogChannel(guild);
-
-        if (!channel) return;
-
-        const embed = new EmbedBuilder()
-            .setTitle(title)
-            .setDescription(description)
-            .setTimestamp();
-
-        await channel.send({
-            embeds: [embed]
-        });
-    } catch (error) {
-        console.error("Log error:", error);
+async function replySafe(interaction, data) {
+  try {
+    if (interaction.replied || interaction.deferred) {
+      return interaction.followUp(data);
     }
+    return interaction.reply(data);
+  } catch (err) {
+    console.error("Reply error:", err.message);
+  }
 }
 
-function getWarningKey(guildId, userId) {
-    return `${guildId}_${userId}`;
+async function logAction(guild, title, description, fields = []) {
+  try {
+    const channel = guild.channels.cache.get(SUPPORT_LOG_CHANNEL_ID);
+    if (!channel) return;
+
+    const embed = new EmbedBuilder()
+      .setTitle(title)
+      .setDescription(description || "No description")
+      .setTimestamp();
+
+    if (fields.length) embed.addFields(fields);
+
+    await channel.send({ embeds: [embed] });
+  } catch (err) {
+    console.error("Log error:", err.message);
+  }
 }
 
-function getWarnings(guildId, userId) {
-    const key = getWarningKey(
-        guildId,
-        userId
-    );
+function ticketButtons(ticketId, held = false) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`ticket_claim_${ticketId}`)
+      .setLabel("Claim")
+      .setEmoji("🎫")
+      .setStyle(ButtonStyle.Primary),
 
-    return database.warnings[key] || [];
+    new ButtonBuilder()
+      .setCustomId(`ticket_${held ? "resume" : "hold"}_${ticketId}`)
+      .setLabel(held ? "Resume" : "Hold")
+      .setEmoji(held ? "▶️" : "⏸️")
+      .setStyle(ButtonStyle.Secondary),
+
+    new ButtonBuilder()
+      .setCustomId(`ticket_close_${ticketId}`)
+      .setLabel("Close")
+      .setEmoji("🔴")
+      .setStyle(ButtonStyle.Danger),
+
+    new ButtonBuilder()
+      .setCustomId(`ticket_info_${ticketId}`)
+      .setLabel("Player Info")
+      .setEmoji("👤")
+      .setStyle(ButtonStyle.Success)
+  );
 }
 
-function addWarning(guildId, userId, data) {
-    const key = getWarningKey(
-        guildId,
-        userId
-    );
-
-    if (!database.warnings[key]) {
-        database.warnings[key] = [];
-    }
-
-    database.warnings[key].push(data);
-
-    saveDatabase();
-
-    return database.warnings[key];
+async function getTicketById(id) {
+  const result = await db(
+    "SELECT * FROM tickets WHERE id=$1 LIMIT 1",
+    [id]
+  );
+  return result.rows[0];
 }
 
-function clearWarnings(guildId, userId) {
-    const key = getWarningKey(
-        guildId,
-        userId
-    );
-
-    delete database.warnings[key];
-
-    saveDatabase();
+async function getOpenTicket(userId) {
+  const result = await db(
+    `SELECT * FROM tickets
+     WHERE user_id=$1 AND guild_id=$2
+     AND status IN ('open','hold')
+     ORDER BY id DESC LIMIT 1`,
+    [userId, SERVER_ID]
+  );
+  return result.rows[0];
 }
 
-function formatDuration(ms) {
-    const seconds = Math.floor(ms / 1000);
+async function createTicket(user, guild) {
+  const existing = await getOpenTicket(user.id);
 
-    if (seconds < 60) {
-        return `${seconds}s`;
+  if (existing) {
+    return {
+      existing: true,
+      ticket: existing
+    };
+  }
+
+  const category = guild.channels.cache.find(
+    c =>
+      c.type === ChannelType.GuildCategory &&
+      c.name.toLowerCase() === "support tickets"
+  );
+
+  let ticketCategory = category;
+
+  if (!ticketCategory) {
+    ticketCategory = await guild.channels.create({
+      name: "Support Tickets",
+      type: ChannelType.GuildCategory
+    });
+  }
+
+  const ticketResult = await db(
+    `INSERT INTO tickets (user_id, guild_id, status)
+     VALUES ($1,$2,'open')
+     RETURNING *`,
+    [user.id, guild.id]
+  );
+
+  const ticket = ticketResult.rows[0];
+
+  const channel = await guild.channels.create({
+    name: `ticket-${ticket.id}`,
+    type: ChannelType.GuildText,
+    parent: ticketCategory.id,
+    permissionOverwrites: [
+      {
+        id: guild.roles.everyone.id,
+        deny: [PermissionsBitField.Flags.ViewChannel]
+      },
+      {
+        id: user.id,
+        allow: [
+          PermissionsBitField.Flags.ViewChannel,
+          PermissionsBitField.Flags.SendMessages,
+          PermissionsBitField.Flags.ReadMessageHistory,
+          PermissionsBitField.Flags.AttachFiles
+        ]
+      },
+      {
+        id: SUPPORT_ADMIN_ROLE_ID,
+        allow: [
+          PermissionsBitField.Flags.ViewChannel,
+          PermissionsBitField.Flags.SendMessages,
+          PermissionsBitField.Flags.ReadMessageHistory,
+          PermissionsBitField.Flags.AttachFiles,
+          PermissionsBitField.Flags.ManageMessages
+        ]
+      }
+    ]
+  });
+
+  await db(
+    "UPDATE tickets SET channel_id=$1 WHERE id=$2",
+    [channel.id, ticket.id]
+  );
+
+  const embed = new EmbedBuilder()
+    .setTitle("🎫 Grand Mafia Support")
+    .setDescription(
+      `Welcome <@${user.id}>.\n\n` +
+      `A support staff member will assist you shortly.\n\n` +
+      `**Ticket:** #${ticket.id}\n` +
+      `**Status:** 🟢 Open`
+    )
+    .setTimestamp();
+
+  await channel.send({
+    content: `<@${user.id}> <@&${SUPPORT_ADMIN_ROLE_ID}>`,
+    embeds: [embed],
+    components: [ticketButtons(ticket.id)]
+  });
+
+  await logAction(
+    guild,
+    "🎫 Ticket Created",
+    `Ticket #${ticket.id} created.`,
+    [
+      { name: "Player", value: `<@${user.id}>`, inline: true },
+      { name: "Channel", value: `${channel}`, inline: true }
+    ]
+  );
+
+  return {
+    existing: false,
+    ticket: {
+      ...ticket,
+      channel_id: channel.id
     }
-
-    const minutes = Math.floor(seconds / 60);
-
-    if (minutes < 60) {
-        return `${minutes}m`;
-    }
-
-    const hours = Math.floor(minutes / 60);
-
-    if (hours < 24) {
-        return `${hours}h`;
-    }
-
-    return `${Math.floor(hours / 24)}d`;
-}
-
-/* =========================================================
-   COMMAND COOLDOWN
-========================================================= */
-
-function checkCooldown(userId, commandName) {
-    const key = `${userId}:${commandName}`;
-
-    const now = Date.now();
-
-    const last = cooldowns.get(key);
-
-    if (!last) {
-        cooldowns.set(key, now);
-        return 0;
-    }
-
-    const difference = now - last;
-
-    const cooldown = 1500;
-
-    if (difference < cooldown) {
-        return cooldown - difference;
-    }
-
-    cooldowns.set(key, now);
-
-    return 0;
+  };
 }
 
 /* =========================================================
@@ -296,2310 +375,1748 @@ function checkCooldown(userId, commandName) {
 
 const commands = [
 
-    new SlashCommandBuilder()
-        .setName("ping")
-        .setDescription("Check bot latency"),
+  new SlashCommandBuilder()
+    .setName("ticket")
+    .setDescription("Create a support ticket"),
 
-    new SlashCommandBuilder()
-        .setName("help")
-        .setDescription("Show all bot commands"),
+  new SlashCommandBuilder()
+    .setName("ticket-close")
+    .setDescription("Close the current ticket"),
 
-    new SlashCommandBuilder()
-        .setName("serverinfo")
-        .setDescription("Show server information"),
+  new SlashCommandBuilder()
+    .setName("ticket-reopen")
+    .setDescription("Reopen a ticket")
+    .addIntegerOption(o =>
+      o.setName("id")
+        .setDescription("Ticket ID")
+        .setRequired(true)
+    ),
 
-    new SlashCommandBuilder()
-        .setName("userinfo")
-        .setDescription("Show user information")
-        .addUserOption(option =>
-            option
-                .setName("user")
-                .setDescription("User")
-                .setRequired(false)
-        ),
+  new SlashCommandBuilder()
+    .setName("ticket-claim")
+    .setDescription("Claim a ticket"),
 
-    new SlashCommandBuilder()
-        .setName("avatar")
-        .setDescription("Show a user's avatar")
-        .addUserOption(option =>
-            option
-                .setName("user")
-                .setDescription("User")
-                .setRequired(false)
-        ),
+  new SlashCommandBuilder()
+    .setName("ticket-hold")
+    .setDescription("Put ticket on hold"),
 
-    new SlashCommandBuilder()
-        .setName("warn")
-        .setDescription("Warn a member")
-        .addUserOption(option =>
-            option
-                .setName("user")
-                .setDescription("Member")
-                .setRequired(true)
+  new SlashCommandBuilder()
+    .setName("ticket-resume")
+    .setDescription("Resume ticket"),
+
+  new SlashCommandBuilder()
+    .setName("ticket-note")
+    .setDescription("Add an internal note")
+    .addStringOption(o =>
+      o.setName("note")
+        .setDescription("Internal note")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("ticket-history")
+    .setDescription("Show ticket history"),
+
+  new SlashCommandBuilder()
+    .setName("ticket-info")
+    .setDescription("Show ticket information"),
+
+  new SlashCommandBuilder()
+    .setName("ticket-block")
+    .setDescription("Block a player from tickets")
+    .addUserOption(o =>
+      o.setName("user")
+        .setDescription("Player")
+        .setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName("reason")
+        .setDescription("Reason")
+    ),
+
+  new SlashCommandBuilder()
+    .setName("ticket-unblock")
+    .setDescription("Unblock a player")
+    .addUserOption(o =>
+      o.setName("user")
+        .setDescription("Player")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("reply")
+    .setDescription("Reply to a ticket player")
+    .addStringOption(o =>
+      o.setName("message")
+        .setDescription("Message")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("warn")
+    .setDescription("Warn a member")
+    .addUserOption(o =>
+      o.setName("user")
+        .setDescription("Member")
+        .setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName("reason")
+        .setDescription("Reason")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("warnings")
+    .setDescription("View warnings")
+    .addUserOption(o =>
+      o.setName("user")
+        .setDescription("Member")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("clear")
+    .setDescription("Clear messages")
+    .addIntegerOption(o =>
+      o.setName("amount")
+        .setDescription("1-100")
+        .setMinValue(1)
+        .setMaxValue(100)
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("timeout")
+    .setDescription("Timeout a member")
+    .addUserOption(o =>
+      o.setName("user")
+        .setDescription("Member")
+        .setRequired(true)
+    )
+    .addIntegerOption(o =>
+      o.setName("minutes")
+        .setDescription("Minutes")
+        .setMinValue(1)
+        .setMaxValue(40320)
+        .setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName("reason")
+        .setDescription("Reason")
+    ),
+
+  new SlashCommandBuilder()
+    .setName("untimeout")
+    .setDescription("Remove timeout")
+    .addUserOption(o =>
+      o.setName("user")
+        .setDescription("Member")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("kick")
+    .setDescription("Kick a member")
+    .addUserOption(o =>
+      o.setName("user")
+        .setDescription("Member")
+        .setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName("reason")
+        .setDescription("Reason")
+    ),
+
+  new SlashCommandBuilder()
+    .setName("ban")
+    .setDescription("Ban a member")
+    .addUserOption(o =>
+      o.setName("user")
+        .setDescription("Member")
+        .setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName("reason")
+        .setDescription("Reason")
+    ),
+
+  new SlashCommandBuilder()
+    .setName("unban")
+    .setDescription("Unban a user")
+    .addStringOption(o =>
+      o.setName("userid")
+        .setDescription("User ID")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("modlogs")
+    .setDescription("View moderation logs")
+    .addUserOption(o =>
+      o.setName("user")
+        .setDescription("Member")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("automod")
+    .setDescription("Show or configure AutoMod")
+    .addStringOption(o =>
+      o.setName("setting")
+        .setDescription("Setting")
+        .addChoices(
+          { name: "on", value: "on" },
+          { name: "off", value: "off" }
         )
-        .addStringOption(option =>
-            option
-                .setName("reason")
-                .setDescription("Reason")
-                .setRequired(false)
-        ),
+    ),
 
-    new SlashCommandBuilder()
-        .setName("warnings")
-        .setDescription("View warnings")
-        .addUserOption(option =>
-            option
-                .setName("user")
-                .setDescription("Member")
-                .setRequired(true)
-        ),
+  new SlashCommandBuilder()
+    .setName("security")
+    .setDescription("Show security status"),
 
-    new SlashCommandBuilder()
-        .setName("clearwarnings")
-        .setDescription("Clear warnings")
-        .addUserOption(option =>
-            option
-                .setName("user")
-                .setDescription("Member")
-                .setRequired(true)
-        ),
+  new SlashCommandBuilder()
+    .setName("announce")
+    .setDescription("Send an announcement")
+    .addStringOption(o =>
+      o.setName("message")
+        .setDescription("Announcement")
+        .setRequired(true)
+    )
+    .addAttachmentOption(o =>
+      o.setName("image")
+        .setDescription("Optional image")
+    ),
 
-    new SlashCommandBuilder()
-        .setName("timeout")
-        .setDescription("Timeout a member")
-        .addUserOption(option =>
-            option
-                .setName("user")
-                .setDescription("Member")
-                .setRequired(true)
-        )
-        .addIntegerOption(option =>
-            option
-                .setName("minutes")
-                .setDescription("Minutes")
-                .setMinValue(1)
-                .setMaxValue(40320)
-                .setRequired(true)
-        )
-        .addStringOption(option =>
-            option
-                .setName("reason")
-                .setDescription("Reason")
-                .setRequired(false)
-        ),
+  new SlashCommandBuilder()
+    .setName("say")
+    .setDescription("Send a message")
+    .addStringOption(o =>
+      o.setName("message")
+        .setDescription("Message")
+        .setRequired(true)
+    )
+    .addAttachmentOption(o =>
+      o.setName("image")
+        .setDescription("Optional image")
+    ),
 
-    new SlashCommandBuilder()
-        .setName("untimeout")
-        .setDescription("Remove timeout")
-        .addUserOption(option =>
-            option
-                .setName("user")
-                .setDescription("Member")
-                .setRequired(true)
-        ),
+  new SlashCommandBuilder()
+    .setName("admin-stats")
+    .setDescription("Show support statistics"),
 
-    new SlashCommandBuilder()
-        .setName("kick")
-        .setDescription("Kick a member")
-        .addUserOption(option =>
-            option
-                .setName("user")
-                .setDescription("Member")
-                .setRequired(true)
-        )
-        .addStringOption(option =>
-            option
-                .setName("reason")
-                .setDescription("Reason")
-                .setRequired(false)
-        ),
+  new SlashCommandBuilder()
+    .setName("player")
+    .setDescription("Show player information")
+    .addUserOption(o =>
+      o.setName("user")
+        .setDescription("Player")
+        .setRequired(true)
+    ),
 
-    new SlashCommandBuilder()
-        .setName("ban")
-        .setDescription("Ban a member")
-        .addUserOption(option =>
-            option
-                .setName("user")
-                .setDescription("Member")
-                .setRequired(true)
-        )
-        .addStringOption(option =>
-            option
-                .setName("reason")
-                .setDescription("Reason")
-                .setRequired(false)
-        ),
+  new SlashCommandBuilder()
+    .setName("slowmode")
+    .setDescription("Set channel slowmode")
+    .addIntegerOption(o =>
+      o.setName("seconds")
+        .setDescription("Seconds")
+        .setMinValue(0)
+        .setMaxValue(21600)
+        .setRequired(true)
+    ),
 
-    new SlashCommandBuilder()
-        .setName("unban")
-        .setDescription("Unban a user")
-        .addStringOption(option =>
-            option
-                .setName("userid")
-                .setDescription("User ID")
-                .setRequired(true)
-        ),
+  new SlashCommandBuilder()
+    .setName("lock")
+    .setDescription("Lock current channel"),
 
-    new SlashCommandBuilder()
-        .setName("purge")
-        .setDescription("Delete messages")
-        .addIntegerOption(option =>
-            option
-                .setName("amount")
-                .setDescription("1-100")
-                .setMinValue(1)
-                .setMaxValue(100)
-                .setRequired(true)
-        ),
+  new SlashCommandBuilder()
+    .setName("unlock")
+    .setDescription("Unlock current channel")
 
-    new SlashCommandBuilder()
-        .setName("lock")
-        .setDescription("Lock the current channel"),
-
-    new SlashCommandBuilder()
-        .setName("unlock")
-        .setDescription("Unlock the current channel"),
-
-    new SlashCommandBuilder()
-        .setName("slowmode")
-        .setDescription("Set channel slowmode")
-        .addIntegerOption(option =>
-            option
-                .setName("seconds")
-                .setDescription("0-21600 seconds")
-                .setMinValue(0)
-                .setMaxValue(21600)
-                .setRequired(true)
-        ),
-
-    new SlashCommandBuilder()
-        .setName("ticket")
-        .setDescription("Create a support ticket"),
-
-    new SlashCommandBuilder()
-        .setName("close")
-        .setDescription("Close the current ticket"),
-
-    new SlashCommandBuilder()
-        .setName("verify")
-        .setDescription("Verify yourself"),
-
-    new SlashCommandBuilder()
-        .setName("setverify")
-        .setDescription("Set verification role")
-        .addRoleOption(option =>
-            option
-                .setName("role")
-                .setDescription("Verification role")
-                .setRequired(true)
-        ),
-
-    new SlashCommandBuilder()
-        .setName("setautorole")
-        .setDescription("Set automatic member role")
-        .addRoleOption(option =>
-            option
-                .setName("role")
-                .setDescription("Auto role")
-                .setRequired(true)
-        ),
-
-    new SlashCommandBuilder()
-        .setName("say")
-        .setDescription("Send a message")
-        .addStringOption(option =>
-            option
-                .setName("message")
-                .setDescription("Message")
-                .setRequired(true)
-        ),
-
-    new SlashCommandBuilder()
-        .setName("announce")
-        .setDescription("Send an announcement")
-        .addStringOption(option =>
-            option
-                .setName("message")
-                .setDescription("Announcement")
-                .setRequired(true)
-        ),
-
-    new SlashCommandBuilder()
-        .setName("botinfo")
-        .setDescription("Show bot information"),
-
-    new SlashCommandBuilder()
-        .setName("staffcheck")
-        .setDescription("Check your support staff status"),
-
-    new SlashCommandBuilder()
-        .setName("clear")
-        .setDescription("Delete messages")
-        .addIntegerOption(option =>
-            option
-                .setName("amount")
-                .setDescription("Amount")
-                .setMinValue(1)
-                .setMaxValue(100)
-                .setRequired(true)
-        )
-
-].map(command => command.toJSON());
+].map(c => c.toJSON());
 
 /* =========================================================
    REGISTER COMMANDS
 ========================================================= */
 
 async function registerCommands() {
+  const rest = new REST({ version: "10" }).setToken(TOKEN);
 
-    try {
+  await rest.put(
+    Routes.applicationGuildCommands(CLIENT_ID, SERVER_ID),
+    { body: commands }
+  );
 
-        if (!TOKEN || !CLIENT_ID) {
-            console.error(
-                "TOKEN or CLIENT_ID is missing."
-            );
-
-            process.exit(1);
-        }
-
-        const rest = new REST({
-            version: "10"
-        }).setToken(TOKEN);
-
-        await rest.put(
-            Routes.applicationGuildCommands(
-                CLIENT_ID,
-                SERVER_ID
-            ),
-            {
-                body: commands
-            }
-        );
-
-        console.log(
-            "✅ Slash commands registered successfully."
-        );
-
-    } catch (error) {
-
-        console.error(
-            "❌ Command registration failed:",
-            error
-        );
-    }
+  console.log("✅ Slash commands registered successfully.");
 }
 
 /* =========================================================
    READY
 ========================================================= */
 
-client.once("ready", () => {
+client.once("ready", async () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
+  console.log(`🏠 Server ID: ${SERVER_ID}`);
+  console.log(`🛡️ Support Role: ${SUPPORT_ADMIN_ROLE_ID}`);
+  console.log(`📋 Log Channel: ${SUPPORT_LOG_CHANNEL_ID}`);
 
-    console.log(
-        `✅ Logged in as ${client.user.tag}`
-    );
+  try {
+    await initDatabase();
+    await registerCommands();
+  } catch (err) {
+    console.error("Startup error:", err);
+  }
 
-    console.log(
-        `🏠 Server ID: ${SERVER_ID}`
-    );
-
-    console.log(
-        `🛡️ Support Role: ${SUPPORT_ADMIN_ROLE_ID}`
-    );
-
-    console.log(
-        `📋 Log Channel: ${SUPPORT_LOG_CHANNEL_ID}`
-    );
-
-    client.user.setPresence({
-        status: "online",
-        activities: [
-            {
-                name: "Grand Mafia RP",
-                type: 3
-            }
-        ]
-    });
+  client.user.setActivity("Grand Mafia Support", {
+    type: 3
+  });
 });
 
 /* =========================================================
-   INTERACTION HANDLER
+   INTERACTIONS
 ========================================================= */
 
-client.on(
-    "interactionCreate",
-    async interaction => {
+client.on("interactionCreate", async interaction => {
 
-        try {
+  try {
 
-            /* =========================================
-               BUTTONS
-            ========================================= */
+    /* ---------------- SLASH COMMANDS ---------------- */
 
-            if (interaction.isButton()) {
+    if (interaction.isChatInputCommand()) {
 
-                if (
-                    interaction.customId ===
-                    "create_ticket"
-                ) {
+      const name = interaction.commandName;
 
-                    const guild =
-                        interaction.guild;
+      /* TICKET */
 
-                    const existing =
-                        guild.channels.cache.find(
-                            channel =>
-                                channel.type ===
-                                ChannelType.GuildText &&
-                                channel.topic ===
-                                `ticket-owner:${interaction.user.id}`
-                        );
+      if (name === "ticket") {
+        await interaction.deferReply({ ephemeral: true });
 
-                    if (existing) {
-
-                        return interaction.reply({
-                            content:
-                                `🎫 You already have a ticket: ${existing}`,
-                            ephemeral: true
-                        });
-                    }
-
-                    const channel =
-                        await guild.channels.create({
-                            name:
-                                `ticket-${interaction.user.username}`
-                                    .toLowerCase()
-                                    .replace(
-                                        /[^a-z0-9-]/g,
-                                        ""
-                                    )
-                                    .slice(0, 20),
-
-                            type:
-                                ChannelType.GuildText,
-
-                            topic:
-                                `ticket-owner:${interaction.user.id}`,
-
-                            permissionOverwrites: [
-
-                                {
-                                    id:
-                                        guild.roles.everyone.id,
-
-                                    deny: [
-                                        PermissionsBitField.Flags.ViewChannel
-                                    ]
-                                },
-
-                                {
-                                    id:
-                                        interaction.user.id,
-
-                                    allow: [
-                                        PermissionsBitField.Flags.ViewChannel,
-                                        PermissionsBitField.Flags.SendMessages,
-                                        PermissionsBitField.Flags.ReadMessageHistory
-                                    ]
-                                },
-
-                                {
-                                    id:
-                                        SUPPORT_ADMIN_ROLE_ID,
-
-                                    allow: [
-                                        PermissionsBitField.Flags.ViewChannel,
-                                        PermissionsBitField.Flags.SendMessages,
-                                        PermissionsBitField.Flags.ReadMessageHistory,
-                                        PermissionsBitField.Flags.ManageMessages
-                                    ]
-                                }
-
-                            ]
-                        });
-
-                    const embed =
-                        new EmbedBuilder()
-                            .setTitle(
-                                "🎫 Support Ticket"
-                            )
-                            .setDescription(
-                                `Welcome ${interaction.user}!\n\n` +
-                                `Please explain your issue clearly.\n` +
-                                `A support administrator will assist you.\n\n` +
-                                `When finished, use the **Close Ticket** button.`
-                            )
-                            .setTimestamp();
-
-                    const row =
-                        new ActionRowBuilder()
-                            .addComponents(
-                                new ButtonBuilder()
-                                    .setCustomId(
-                                        "close_ticket"
-                                    )
-                                    .setLabel(
-                                        "Close Ticket"
-                                    )
-                                    .setEmoji("🔒")
-                                    .setStyle(
-                                        ButtonStyle.Danger
-                                    )
-                            );
-
-                    await channel.send({
-                        content:
-                            `<@&${SUPPORT_ADMIN_ROLE_ID}>`,
-                        embeds: [embed],
-                        components: [row]
-                    });
-
-                    database.tickets[
-                        channel.id
-                    ] = {
-                        owner:
-                            interaction.user.id,
-                        created:
-                            Date.now()
-                    };
-
-                    saveDatabase();
-
-                    await sendLog(
-                        guild,
-                        "🎫 Ticket Created",
-                        `**User:** ${interaction.user}\n` +
-                        `**Channel:** ${channel}`
-                    );
-
-                    return interaction.reply({
-                        content:
-                            `✅ Ticket created: ${channel}`,
-                        ephemeral: true
-                    });
-                }
-
-                if (
-                    interaction.customId ===
-                    "close_ticket"
-                ) {
-
-                    const channel =
-                        interaction.channel;
-
-                    if (
-                        !channel ||
-                        channel.type !==
-                            ChannelType.GuildText
-                    ) {
-                        return interaction.reply({
-                            content:
-                                "❌ Invalid ticket channel.",
-                            ephemeral: true
-                        });
-                    }
-
-                    const allowed =
-                        isSupportAdmin(
-                            interaction.member
-                        ) ||
-                        channel.topic ===
-                            `ticket-owner:${interaction.user.id}`;
-
-                    if (!allowed) {
-
-                        return interaction.reply({
-                            content:
-                                "❌ You cannot close this ticket.",
-                            ephemeral: true
-                        });
-                    }
-
-                    await interaction.reply(
-                        "🔒 Ticket will be closed in 5 seconds."
-                    );
-
-                    await sendLog(
-                        interaction.guild,
-                        "🔒 Ticket Closed",
-                        `**Ticket:** ${channel.name}\n` +
-                        `**Closed by:** ${interaction.user}`
-                    );
-
-                    setTimeout(async () => {
-
-                        await channel.delete(
-                            "Support ticket closed"
-                        ).catch(() => {});
-
-                        delete database.tickets[
-                            channel.id
-                        ];
-
-                        saveDatabase();
-
-                    }, 5000);
-
-                    return;
-                }
-
-                return;
-            }
-
-            /* =========================================
-               SLASH COMMANDS
-            ========================================= */
-
-            if (
-                !interaction.isChatInputCommand()
-            ) {
-                return;
-            }
-
-            const cooldown =
-                checkCooldown(
-                    interaction.user.id,
-                    interaction.commandName
-                );
-
-            if (cooldown > 0) {
-
-                return interaction.reply({
-                    content:
-                        `⏳ Please wait ${(
-                            cooldown / 1000
-                        ).toFixed(1)} seconds.`,
-                    ephemeral: true
-                });
-            }
-
-            const command =
-                interaction.commandName;
-
-            /* =========================================
-               PING
-            ========================================= */
-
-            if (command === "ping") {
-
-                return interaction.reply({
-                    content:
-                        `🏓 Pong! WebSocket: ${client.ws.ping}ms`,
-                    ephemeral: true
-                });
-            }
-
-            /* =========================================
-               HELP
-            ========================================= */
-
-            if (command === "help") {
-
-                const embed =
-                    new EmbedBuilder()
-                        .setTitle(
-                            "🤖 Support Bot Commands"
-                        )
-                        .setDescription(
-                            "Complete command list"
-                        )
-                        .addFields(
-
-                            {
-                                name: "🔧 General",
-                                value:
-                                    "`/ping` `/help` `/serverinfo` `/userinfo` `/avatar` `/botinfo`"
-                            },
-
-                            {
-                                name: "🛡️ Moderation",
-                                value:
-                                    "`/warn` `/warnings` `/clearwarnings` `/timeout` `/untimeout` `/kick` `/ban` `/unban`"
-                            },
-
-                            {
-                                name: "🧹 Channel",
-                                value:
-                                    "`/purge` `/clear` `/lock` `/unlock` `/slowmode`"
-                            },
-
-                            {
-                                name: "🎫 Support",
-                                value:
-                                    "`/ticket` `/close`"
-                            },
-
-                            {
-                                name: "🔐 Security",
-                                value:
-                                    "Anti-spam, anti-mass-mention and anti-raid protection are automatic."
-                            },
-
-                            {
-                                name: "⚙️ Configuration",
-                                value:
-                                    "`/setverify` `/setautorole`"
-                            },
-
-                            {
-                                name: "📢 Staff",
-                                value:
-                                    "`/say` `/announce` `/staffcheck`"
-                            }
-
-                        )
-                        .setTimestamp();
-
-                return interaction.reply({
-                    embeds: [embed],
-                    ephemeral: true
-                });
-            }
-
-            /* =========================================
-               SERVER INFO
-            ========================================= */
-
-            if (
-                command === "serverinfo"
-            ) {
-
-                const guild =
-                    interaction.guild;
-
-                const embed =
-                    new EmbedBuilder()
-                        .setTitle(
-                            `🏠 ${guild.name}`
-                        )
-                        .addFields(
-
-                            {
-                                name: "👥 Members",
-                                value:
-                                    `${guild.memberCount}`,
-                                inline: true
-                            },
-
-                            {
-                                name: "📁 Channels",
-                                value:
-                                    `${guild.channels.cache.size}`,
-                                inline: true
-                            },
-
-                            {
-                                name: "🎭 Roles",
-                                value:
-                                    `${guild.roles.cache.size}`,
-                                inline: true
-                            },
-
-                            {
-                                name: "👑 Owner",
-                                value:
-                                    `<@${guild.ownerId}>`,
-                                inline: true
-                            },
-
-                            {
-                                name: "🆔 Server ID",
-                                value:
-                                    guild.id,
-                                inline: true
-                            }
-
-                        )
-                        .setTimestamp();
-
-                return interaction.reply({
-                    embeds: [embed]
-                });
-            }
-
-            /* =========================================
-               USER INFO
-            ========================================= */
-
-            if (
-                command === "userinfo"
-            ) {
-
-                const user =
-                    interaction.options.getUser(
-                        "user"
-                    ) ||
-                    interaction.user;
-
-                const member =
-                    await interaction.guild.members
-                        .fetch(user.id)
-                        .catch(() => null);
-
-                const embed =
-                    new EmbedBuilder()
-                        .setTitle(
-                            "👤 User Information"
-                        )
-                        .setThumbnail(
-                            user.displayAvatarURL({
-                                size: 1024
-                            })
-                        )
-                        .addFields(
-
-                            {
-                                name: "Username",
-                                value:
-                                    user.tag,
-                                inline: true
-                            },
-
-                            {
-                                name: "User ID",
-                                value:
-                                    user.id,
-                                inline: true
-                            },
-
-                            {
-                                name: "Bot",
-                                value:
-                                    user.bot
-                                        ? "Yes"
-                                        : "No",
-                                inline: true
-                            },
-
-                            {
-                                name: "Account Created",
-                                value:
-                                    `<t:${Math.floor(
-                                        user.createdTimestamp /
-                                            1000
-                                    )}:F>`
-                            },
-
-                            {
-                                name: "Joined Server",
-                                value:
-                                    member?.joinedTimestamp
-                                        ? `<t:${Math.floor(
-                                              member.joinedTimestamp /
-                                                  1000
-                                          )}:F>`
-                                        : "Unknown"
-                            }
-
-                        )
-                        .setTimestamp();
-
-                return interaction.reply({
-                    embeds: [embed]
-                });
-            }
-
-            /* =========================================
-               AVATAR
-            ========================================= */
-
-            if (
-                command === "avatar"
-            ) {
-
-                const user =
-                    interaction.options.getUser(
-                        "user"
-                    ) ||
-                    interaction.user;
-
-                const embed =
-                    new EmbedBuilder()
-                        .setTitle(
-                            `${user.username}'s Avatar`
-                        )
-                        .setImage(
-                            user.displayAvatarURL({
-                                size: 2048
-                            })
-                        );
-
-                return interaction.reply({
-                    embeds: [embed]
-                });
-            }
-
-            /* =========================================
-               STAFF PERMISSION COMMANDS
-            ========================================= */
-
-            const staffCommands = [
-                "warn",
-                "warnings",
-                "clearwarnings",
-                "timeout",
-                "untimeout",
-                "kick",
-                "ban",
-                "unban",
-                "purge",
-                "clear",
-                "lock",
-                "unlock",
-                "slowmode",
-                "setverify",
-                "setautorole",
-                "say",
-                "announce",
-                "staffcheck"
-            ];
-
-            if (
-                staffCommands.includes(command) &&
-                !isSupportAdmin(
-                    interaction.member
-                )
-            ) {
-
-                return interaction.reply({
-                    content:
-                        "❌ You need the Support Admin role or Administrator permission.",
-                    ephemeral: true
-                });
-            }
-
-            /* =========================================
-               WARN
-            ========================================= */
-
-            if (command === "warn") {
-
-                const user =
-                    interaction.options.getUser(
-                        "user"
-                    );
-
-                const reason =
-                    interaction.options.getString(
-                        "reason"
-                    ) ||
-                    "No reason provided";
-
-                if (
-                    user.id ===
-                    interaction.user.id
-                ) {
-                    return interaction.reply({
-                        content:
-                            "❌ You cannot warn yourself.",
-                        ephemeral: true
-                    });
-                }
-
-                const member =
-                    await interaction.guild.members
-                        .fetch(user.id)
-                        .catch(() => null);
-
-                if (
-                    member &&
-                    member.roles.highest.position >=
-                        interaction.member.roles.highest
-                            .position &&
-                    !isOwner(
-                        interaction.member
-                    )
-                ) {
-                    return interaction.reply({
-                        content:
-                            "❌ You cannot moderate this member because of role hierarchy.",
-                        ephemeral: true
-                    });
-                }
-
-                const list =
-                    addWarning(
-                        interaction.guild.id,
-                        user.id,
-                        {
-                            moderator:
-                                interaction.user.id,
-                            reason,
-                            timestamp:
-                                Date.now()
-                        }
-                    );
-
-                await user.send(
-                    `⚠️ You received a warning in **${interaction.guild.name}**.\nReason: ${reason}`
-                ).catch(() => {});
-
-                await sendLog(
-                    interaction.guild,
-                    "⚠️ Member Warned",
-                    `**Member:** ${user}\n` +
-                    `**Moderator:** ${interaction.user}\n` +
-                    `**Reason:** ${reason}\n` +
-                    `**Total warnings:** ${list.length}`
-                );
-
-                return interaction.reply(
-                    `⚠️ ${user} has been warned. Total warnings: **${list.length}**.`
-                );
-            }
-
-            /* =========================================
-               WARNINGS
-            ========================================= */
-
-            if (
-                command === "warnings"
-            ) {
-
-                const user =
-                    interaction.options.getUser(
-                        "user"
-                    );
-
-                const list =
-                    getWarnings(
-                        interaction.guild.id,
-                        user.id
-                    );
-
-                if (!list.length) {
-
-                    return interaction.reply(
-                        `✅ ${user} has no warnings.`
-                    );
-                }
-
-                const text =
-                    list
-                        .slice(-10)
-                        .map(
-                            (warning, index) =>
-                                `**${index + 1}.** ${warning.reason}\n` +
-                                `Moderator: <@${warning.moderator}>`
-                        )
-                        .join("\n\n");
-
-                const embed =
-                    new EmbedBuilder()
-                        .setTitle(
-                            `⚠️ Warnings — ${user.tag}`
-                        )
-                        .setDescription(
-                            text
-                        )
-                        .setFooter({
-                            text:
-                                `Total warnings: ${list.length}`
-                        })
-                        .setTimestamp();
-
-                return interaction.reply({
-                    embeds: [embed]
-                });
-            }
-
-            /* =========================================
-               CLEAR WARNINGS
-            ========================================= */
-
-            if (
-                command === "clearwarnings"
-            ) {
-
-                const user =
-                    interaction.options.getUser(
-                        "user"
-                    );
-
-                clearWarnings(
-                    interaction.guild.id,
-                    user.id
-                );
-
-                await sendLog(
-                    interaction.guild,
-                    "🧹 Warnings Cleared",
-                    `**Member:** ${user}\n` +
-                    `**Moderator:** ${interaction.user}`
-                );
-
-                return interaction.reply(
-                    `✅ Warnings cleared for ${user}.`
-                );
-            }
-
-            /* =========================================
-               TIMEOUT
-            ========================================= */
-
-            if (
-                command === "timeout"
-            ) {
-
-                const user =
-                    interaction.options.getUser(
-                        "user"
-                    );
-
-                const minutes =
-                    interaction.options.getInteger(
-                        "minutes"
-                    );
-
-                const reason =
-                    interaction.options.getString(
-                        "reason"
-                    ) ||
-                    "No reason provided";
-
-                const member =
-                    await interaction.guild.members
-                        .fetch(user.id)
-                        .catch(() => null);
-
-                if (!member) {
-
-                    return interaction.reply({
-                        content:
-                            "❌ Member not found.",
-                        ephemeral: true
-                    });
-                }
-
-                if (
-                    !member.moderatable
-                ) {
-
-                    return interaction.reply({
-                        content:
-                            "❌ I cannot timeout this member. Check my role position.",
-                        ephemeral: true
-                    });
-                }
-
-                if (
-                    member.id ===
-                    interaction.user.id
-                ) {
-
-                    return interaction.reply({
-                        content:
-                            "❌ You cannot timeout yourself.",
-                        ephemeral: true
-                    });
-                }
-
-                await member.timeout(
-                    minutes * 60 * 1000,
-                    reason
-                );
-
-                await sendLog(
-                    interaction.guild,
-                    "⏱️ Member Timed Out",
-                    `**Member:** ${user}\n` +
-                    `**Duration:** ${minutes} minutes\n` +
-                    `**Reason:** ${reason}\n` +
-                    `**Moderator:** ${interaction.user}`
-                );
-
-                return interaction.reply(
-                    `⏱️ ${user} has been timed out for **${minutes} minutes**.`
-                );
-            }
-
-            /* =========================================
-               UNTIMEOUT
-            ========================================= */
-
-            if (
-                command === "untimeout"
-            ) {
-
-                const user =
-                    interaction.options.getUser(
-                        "user"
-                    );
-
-                const member =
-                    await interaction.guild.members
-                        .fetch(user.id)
-                        .catch(() => null);
-
-                if (!member) {
-                    return interaction.reply(
-                        "❌ Member not found."
-                    );
-                }
-
-                if (
-                    !member.moderatable
-                ) {
-                    return interaction.reply(
-                        "❌ I cannot modify this member."
-                    );
-                }
-
-                await member.timeout(
-                    null,
-                    "Timeout removed"
-                );
-
-                await sendLog(
-                    interaction.guild,
-                    "✅ Timeout Removed",
-                    `**Member:** ${user}\n` +
-                    `**Moderator:** ${interaction.user}`
-                );
-
-                return interaction.reply(
-                    `✅ Timeout removed from ${user}.`
-                );
-            }
-
-            /* =========================================
-               KICK
-            ========================================= */
-
-            if (command === "kick") {
-
-                const user =
-                    interaction.options.getUser(
-                        "user"
-                    );
-
-                const reason =
-                    interaction.options.getString(
-                        "reason"
-                    ) ||
-                    "No reason provided";
-
-                const member =
-                    await interaction.guild.members
-                        .fetch(user.id)
-                        .catch(() => null);
-
-                if (
-                    !member ||
-                    !member.kickable
-                ) {
-                    return interaction.reply({
-                        content:
-                            "❌ I cannot kick this member.",
-                        ephemeral: true
-                    });
-                }
-
-                await member.kick(
-                    reason
-                );
-
-                await sendLog(
-                    interaction.guild,
-                    "👢 Member Kicked",
-                    `**Member:** ${user}\n` +
-                    `**Reason:** ${reason}\n` +
-                    `**Moderator:** ${interaction.user}`
-                );
-
-                return interaction.reply(
-                    `👢 ${user.tag} has been kicked.`
-                );
-            }
-
-            /* =========================================
-               BAN
-            ========================================= */
-
-            if (command === "ban") {
-
-                const user =
-                    interaction.options.getUser(
-                        "user"
-                    );
-
-                const reason =
-                    interaction.options.getString(
-                        "reason"
-                    ) ||
-                    "No reason provided";
-
-                const member =
-                    await interaction.guild.members
-                        .fetch(user.id)
-                        .catch(() => null);
-
-                if (
-                    member &&
-                    !member.bannable
-                ) {
-                    return interaction.reply({
-                        content:
-                            "❌ I cannot ban this member.",
-                        ephemeral: true
-                    });
-                }
-
-                await interaction.guild.members.ban(
-                    user.id,
-                    {
-                        reason
-                    }
-                );
-
-                await sendLog(
-                    interaction.guild,
-                    "🔨 Member Banned",
-                    `**Member:** ${user}\n` +
-                    `**Reason:** ${reason}\n` +
-                    `**Moderator:** ${interaction.user}`
-                );
-
-                return interaction.reply(
-                    `🔨 ${user.tag} has been banned.`
-                );
-            }
-
-            /* =========================================
-               UNBAN
-            ========================================= */
-
-            if (command === "unban") {
-
-                const userId =
-                    interaction.options.getString(
-                        "userid"
-                    );
-
-                try {
-
-                    await interaction.guild.members.unban(
-                        userId
-                    );
-
-                    await sendLog(
-                        interaction.guild,
-                        "✅ User Unbanned",
-                        `**User ID:** ${userId}\n` +
-                        `**Moderator:** ${interaction.user}`
-                    );
-
-                    return interaction.reply(
-                        `✅ User **${userId}** has been unbanned.`
-                    );
-
-                } catch {
-
-                    return interaction.reply({
-                        content:
-                            "❌ User is not banned or the ID is invalid.",
-                        ephemeral: true
-                    });
-                }
-            }
-
-            /* =========================================
-               PURGE / CLEAR
-            ========================================= */
-
-            if (
-                command === "purge" ||
-                command === "clear"
-            ) {
-
-                const amount =
-                    interaction.options.getInteger(
-                        "amount"
-                    );
-
-                if (
-                    !interaction.channel ||
-                    !interaction.channel.isTextBased()
-                ) {
-                    return interaction.reply({
-                        content:
-                            "❌ This command cannot be used here.",
-                        ephemeral: true
-                    });
-                }
-
-                const deleted =
-                    await interaction.channel.bulkDelete(
-                        amount,
-                        true
-                    );
-
-                await interaction.reply({
-                    content:
-                        `🧹 Deleted **${deleted.size}** messages.`,
-                    ephemeral: true
-                });
-
-                await sendLog(
-                    interaction.guild,
-                    "🧹 Messages Deleted",
-                    `**Channel:** ${interaction.channel}\n` +
-                    `**Amount:** ${deleted.size}\n` +
-                    `**Moderator:** ${interaction.user}`
-                );
-
-                return;
-            }
-
-            /* =========================================
-               LOCK
-            ========================================= */
-
-            if (command === "lock") {
-
-                await interaction.channel.permissionOverwrites.edit(
-                    interaction.guild.roles.everyone,
-                    {
-                        SendMessages: false
-                    }
-                );
-
-                await sendLog(
-                    interaction.guild,
-                    "🔒 Channel Locked",
-                    `**Channel:** ${interaction.channel}\n` +
-                    `**Moderator:** ${interaction.user}`
-                );
-
-                return interaction.reply(
-                    "🔒 Channel locked."
-                );
-            }
-
-            /* =========================================
-               UNLOCK
-            ========================================= */
-
-            if (command === "unlock") {
-
-                await interaction.channel.permissionOverwrites.edit(
-                    interaction.guild.roles.everyone,
-                    {
-                        SendMessages: null
-                    }
-                );
-
-                await sendLog(
-                    interaction.guild,
-                    "🔓 Channel Unlocked",
-                    `**Channel:** ${interaction.channel}\n` +
-                    `**Moderator:** ${interaction.user}`
-                );
-
-                return interaction.reply(
-                    "🔓 Channel unlocked."
-                );
-            }
-
-            /* =========================================
-               SLOWMODE
-            ========================================= */
-
-            if (
-                command === "slowmode"
-            ) {
-
-                const seconds =
-                    interaction.options.getInteger(
-                        "seconds"
-                    );
-
-                await interaction.channel.setRateLimitPerUser(
-                    seconds
-                );
-
-                return interaction.reply(
-                    seconds === 0
-                        ? "🐌 Slowmode disabled."
-                        : `🐌 Slowmode set to **${seconds} seconds**.`
-                );
-            }
-
-            /* =========================================
-               TICKET
-            ========================================= */
-
-            if (command === "ticket") {
-
-                const existing =
-                    interaction.guild.channels.cache.find(
-                        channel =>
-                            channel.type ===
-                                ChannelType.GuildText &&
-                            channel.topic ===
-                                `ticket-owner:${interaction.user.id}`
-                    );
-
-                if (existing) {
-
-                    return interaction.reply({
-                        content:
-                            `🎫 You already have a ticket: ${existing}`,
-                        ephemeral: true
-                    });
-                }
-
-                const embed =
-                    new EmbedBuilder()
-                        .setTitle(
-                            "🎫 Grand Mafia Support"
-                        )
-                        .setDescription(
-                            "Click the button below to create a support ticket."
-                        )
-                        .setTimestamp();
-
-                const row =
-                    new ActionRowBuilder()
-                        .addComponents(
-                            new ButtonBuilder()
-                                .setCustomId(
-                                    "create_ticket"
-                                )
-                                .setLabel(
-                                    "Create Ticket"
-                                )
-                                .setEmoji("🎫")
-                                .setStyle(
-                                    ButtonStyle.Primary
-                                )
-                        );
-
-                return interaction.reply({
-                    embeds: [embed],
-                    components: [row]
-                });
-            }
-
-            /* =========================================
-               CLOSE
-            ========================================= */
-
-            if (command === "close") {
-
-                const channel =
-                    interaction.channel;
-
-                if (
-                    !channel ||
-                    channel.type !==
-                        ChannelType.GuildText
-                ) {
-                    return interaction.reply({
-                        content:
-                            "❌ This is not a ticket.",
-                        ephemeral: true
-                    });
-                }
-
-                const isTicket =
-                    channel.topic &&
-                    channel.topic.startsWith(
-                        "ticket-owner:"
-                    );
-
-                if (!isTicket) {
-
-                    return interaction.reply({
-                        content:
-                            "❌ This channel is not a ticket.",
-                        ephemeral: true
-                    });
-                }
-
-                const allowed =
-                    isSupportAdmin(
-                        interaction.member
-                    ) ||
-                    channel.topic ===
-                        `ticket-owner:${interaction.user.id}`;
-
-                if (!allowed) {
-
-                    return interaction.reply({
-                        content:
-                            "❌ You cannot close this ticket.",
-                        ephemeral: true
-                    });
-                }
-
-                await interaction.reply(
-                    "🔒 Closing ticket in 5 seconds..."
-                );
-
-                await sendLog(
-                    interaction.guild,
-                    "🔒 Ticket Closed",
-                    `**Channel:** ${channel.name}\n` +
-                    `**Closed by:** ${interaction.user}`
-                );
-
-                setTimeout(() => {
-
-                    channel.delete(
-                        "Ticket closed"
-                    ).catch(() => {});
-
-                }, 5000);
-
-                return;
-            }
-
-            /* =========================================
-               VERIFY
-            ========================================= */
-
-            if (command === "verify") {
-
-                const roleId =
-                    database.verifyRole[
-                        interaction.guild.id
-                    ];
-
-                if (!roleId) {
-
-                    return interaction.reply({
-                        content:
-                            "❌ Verification role has not been configured.",
-                        ephemeral: true
-                    });
-                }
-
-                const role =
-                    interaction.guild.roles.cache.get(
-                        roleId
-                    );
-
-                if (!role) {
-
-                    return interaction.reply({
-                        content:
-                            "❌ Verification role no longer exists.",
-                        ephemeral: true
-                    });
-                }
-
-                if (
-                    interaction.member.roles.cache.has(
-                        role.id
-                    )
-                ) {
-
-                    return interaction.reply({
-                        content:
-                            "✅ You are already verified.",
-                        ephemeral: true
-                    });
-                }
-
-                await interaction.member.roles.add(
-                    role
-                );
-
-                return interaction.reply({
-                    content:
-                        "✅ Verification successful!",
-                    ephemeral: true
-                });
-            }
-
-            /* =========================================
-               SET VERIFY
-            ========================================= */
-
-            if (
-                command === "setverify"
-            ) {
-
-                const role =
-                    interaction.options.getRole(
-                        "role"
-                    );
-
-                if (
-                    role.position >=
-                    interaction.guild.members.me
-                        .roles.highest.position
-                ) {
-
-                    return interaction.reply({
-                        content:
-                            "❌ My bot role must be higher than the verification role.",
-                        ephemeral: true
-                    });
-                }
-
-                database.verifyRole[
-                    interaction.guild.id
-                ] = role.id;
-
-                saveDatabase();
-
-                return interaction.reply(
-                    `✅ Verification role set to ${role}.`
-                );
-            }
-
-            /* =========================================
-               SET AUTO ROLE
-            ========================================= */
-
-            if (
-                command === "setautorole"
-            ) {
-
-                const role =
-                    interaction.options.getRole(
-                        "role"
-                    );
-
-                if (
-                    role.position >=
-                    interaction.guild.members.me
-                        .roles.highest.position
-                ) {
-
-                    return interaction.reply({
-                        content:
-                            "❌ My bot role must be higher than the auto-role.",
-                        ephemeral: true
-                    });
-                }
-
-                database.autorole[
-                    interaction.guild.id
-                ] = role.id;
-
-                saveDatabase();
-
-                return interaction.reply(
-                    `✅ Auto-role set to ${role}.`
-                );
-            }
-
-            /* =========================================
-               SAY
-            ========================================= */
-
-            if (command === "say") {
-
-                const message =
-                    interaction.options.getString(
-                        "message"
-                    );
-
-                await interaction.channel.send(
-                    message
-                );
-
-                return interaction.reply({
-                    content:
-                        "✅ Message sent.",
-                    ephemeral: true
-                });
-            }
-
-            /* =========================================
-               ANNOUNCE
-            ========================================= */
-
-            if (
-                command === "announce"
-            ) {
-
-                const message =
-                    interaction.options.getString(
-                        "message"
-                    );
-
-                const embed =
-                    new EmbedBuilder()
-                        .setTitle(
-                            "📢 Announcement"
-                        )
-                        .setDescription(
-                            message
-                        )
-                        .setTimestamp();
-
-                await interaction.channel.send({
-                    embeds: [embed]
-                });
-
-                await sendLog(
-                    interaction.guild,
-                    "📢 Announcement",
-                    `**By:** ${interaction.user}\n\n${message}`
-                );
-
-                return interaction.reply({
-                    content:
-                        "✅ Announcement sent.",
-                    ephemeral: true
-                });
-            }
-
-            /* =========================================
-               BOT INFO
-            ========================================= */
-
-            if (
-                command === "botinfo"
-            ) {
-
-                const uptime =
-                    formatDuration(
-                        client.uptime || 0
-                    );
-
-                const memory =
-                    process.memoryUsage();
-
-                const embed =
-                    new EmbedBuilder()
-                        .setTitle(
-                            "🤖 Bot Information"
-                        )
-                        .addFields(
-
-                            {
-                                name: "Bot",
-                                value:
-                                    client.user.tag,
-                                inline: true
-                            },
-
-                            {
-                                name: "Servers",
-                                value:
-                                    `${client.guilds.cache.size}`,
-                                inline: true
-                            },
-
-                            {
-                                name: "Ping",
-                                value:
-                                    `${client.ws.ping}ms`,
-                                inline: true
-                            },
-
-                            {
-                                name: "Uptime",
-                                value:
-                                    uptime,
-                                inline: true
-                            },
-
-                            {
-                                name: "Memory",
-                                value:
-                                    `${Math.round(
-                                        memory.rss /
-                                            1024 /
-                                            1024
-                                    )} MB`,
-                                inline: true
-                            },
-
-                            {
-                                name: "Discord.js",
-                                value:
-                                    require("discord.js")
-                                        .version,
-                                inline: true
-                            }
-
-                        )
-                        .setTimestamp();
-
-                return interaction.reply({
-                    embeds: [embed]
-                });
-            }
-
-            /* =========================================
-               STAFF CHECK
-            ========================================= */
-
-            if (
-                command === "staffcheck"
-            ) {
-
-                const hasRole =
-                    interaction.member.roles.cache.has(
-                        SUPPORT_ADMIN_ROLE_ID
-                    );
-
-                return interaction.reply({
-                    embeds: [
-                        new EmbedBuilder()
-                            .setTitle(
-                                "🛡️ Staff Status"
-                            )
-                            .setDescription(
-                                hasRole
-                                    ? "✅ You have the Support Admin role."
-                                    : "❌ You do not have the Support Admin role."
-                            )
-                            .setTimestamp()
-                    ],
-                    ephemeral: true
-                });
-            }
-
-        } catch (error) {
-
-            console.error(
-                "Interaction error:",
-                error
-            );
-
-            const response = {
-                content:
-                    "❌ An unexpected error occurred while processing this command.",
-                ephemeral: true
-            };
-
-            if (
-                interaction.replied ||
-                interaction.deferred
-            ) {
-
-                await interaction.followUp(
-                    response
-                ).catch(() => {});
-
-            } else {
-
-                await interaction.reply(
-                    response
-                ).catch(() => {});
-            }
-        }
-    }
-);
-
-/* =========================================================
-   MEMBER JOIN
-========================================================= */
-
-client.on(
-    "guildMemberAdd",
-    async member => {
-
-        try {
-
-            /* =========================
-               AUTO ROLE
-            ========================= */
-
-            const roleId =
-                database.autorole[
-                    member.guild.id
-                ];
-
-            if (roleId) {
-
-                const role =
-                    member.guild.roles.cache.get(
-                        roleId
-                    );
-
-                if (
-                    role &&
-                    role.position <
-                        member.guild.members.me
-                            .roles.highest.position
-                ) {
-
-                    await member.roles.add(
-                        role
-                    ).catch(() => {});
-                }
-            }
-
-            /* =========================
-               JOIN LOG
-            ========================= */
-
-            await sendLog(
-                member.guild,
-                "📥 Member Joined",
-                `**Member:** ${member.user}\n` +
-                `**ID:** ${member.id}\n` +
-                `**Account:** <t:${Math.floor(
-                    member.user.createdTimestamp /
-                        1000
-                )}:R>`
-            );
-
-            /* =========================
-               ANTI RAID
-            ========================= */
-
-            const guildId =
-                member.guild.id;
-
-            const now =
-                Date.now();
-
-            if (!joinTracker.has(guildId)) {
-                joinTracker.set(
-                    guildId,
-                    []
-                );
-            }
-
-            const joins =
-                joinTracker.get(
-                    guildId
-                );
-
-            joins.push(now);
-
-            while (
-                joins.length &&
-                now - joins[0] >
-                    10000
-            ) {
-                joins.shift();
-            }
-
-            /*
-              10 joins within 10 seconds
-              triggers raid warning.
-            */
-
-            if (
-                joins.length >= 10
-            ) {
-
-                await sendLog(
-                    member.guild,
-                    "🚨 POSSIBLE RAID DETECTED",
-                    `**${joins.length} members joined within 10 seconds.**\n\n` +
-                    `Staff should immediately review the server.`
-                );
-
-                joinTracker.set(
-                    guildId,
-                    []
-                );
-            }
-
-        } catch (error) {
-
-            console.error(
-                "Member join error:",
-                error
-            );
-        }
-    }
-);
-
-/* =========================================================
-   MEMBER LEAVE
-========================================================= */
-
-client.on(
-    "guildMemberRemove",
-    async member => {
-
-        await sendLog(
-            member.guild,
-            "📤 Member Left",
-            `**Member:** ${member.user.tag}\n` +
-            `**ID:** ${member.id}`
+        const blocked = await db(
+          "SELECT 1 FROM blocked_users WHERE guild_id=$1 AND user_id=$2",
+          [SERVER_ID, interaction.user.id]
         );
+
+        if (blocked.rowCount) {
+          return interaction.editReply("🚫 You are blocked from opening support tickets.");
+        }
+
+        const result = await createTicket(interaction.user, interaction.guild);
+
+        if (result.existing) {
+          return interaction.editReply(
+            `🎫 You already have an open ticket: <#${result.ticket.channel_id}>`
+          );
+        }
+
+        return interaction.editReply(
+          `✅ Your ticket has been created: <#${result.ticket.channel_id}>`
+        );
+      }
+
+      /* STAFF CHECK */
+
+      const staffCommands = [
+        "ticket-close",
+        "ticket-reopen",
+        "ticket-claim",
+        "ticket-hold",
+        "ticket-resume",
+        "ticket-note",
+        "ticket-history",
+        "ticket-info",
+        "ticket-block",
+        "ticket-unblock",
+        "reply",
+        "warn",
+        "warnings",
+        "clear",
+        "timeout",
+        "untimeout",
+        "kick",
+        "ban",
+        "unban",
+        "modlogs",
+        "automod",
+        "security",
+        "announce",
+        "say",
+        "admin-stats",
+        "player",
+        "slowmode",
+        "lock",
+        "unlock"
+      ];
+
+      if (staffCommands.includes(name) && !staffOnly(interaction)) {
+        return replySafe(interaction, {
+          content: "❌ You don't have permission to use this command.",
+          ephemeral: true
+        });
+      }
+
+      /* CLOSE */
+
+      if (name === "ticket-close") {
+        await interaction.deferReply({ ephemeral: true });
+
+        const ticket = await db(
+          `SELECT * FROM tickets WHERE channel_id=$1
+           AND status IN ('open','hold') LIMIT 1`,
+          [interaction.channel.id]
+        );
+
+        if (!ticket.rowCount) {
+          return interaction.editReply("❌ This is not an active ticket.");
+        }
+
+        const t = ticket.rows[0];
+
+        await db(
+          `UPDATE tickets
+           SET status='closed', closed_at=NOW(), updated_at=NOW()
+           WHERE id=$1`,
+          [t.id]
+        );
+
+        await interaction.channel.permissionOverwrites.edit(
+          t.user_id,
+          { SendMessages: false }
+        );
+
+        await interaction.channel.send(
+          `🔴 Ticket #${t.id} has been closed by ${interaction.user}.`
+        );
+
+        await logAction(
+          interaction.guild,
+          "🔴 Ticket Closed",
+          `Ticket #${t.id} closed.`,
+          [
+            { name: "Player", value: `<@${t.user_id}>` },
+            { name: "Staff", value: `<@${interaction.user.id}>` }
+          ]
+        );
+
+        return interaction.editReply("✅ Ticket closed.");
+      }
+
+      /* CLAIM */
+
+      if (name === "ticket-claim") {
+        await interaction.deferReply({ ephemeral: true });
+
+        const ticket = await db(
+          "SELECT * FROM tickets WHERE channel_id=$1 AND status='open'",
+          [interaction.channel.id]
+        );
+
+        if (!ticket.rowCount) {
+          return interaction.editReply("❌ No active ticket found.");
+        }
+
+        await db(
+          "UPDATE tickets SET claimed_by=$1, updated_at=NOW() WHERE id=$2",
+          [interaction.user.id, ticket.rows[0].id]
+        );
+
+        await interaction.channel.send(
+          `🎫 ${interaction.user} has claimed this ticket.`
+        );
+
+        return interaction.editReply("✅ Ticket claimed.");
+      }
+
+      /* HOLD */
+
+      if (name === "ticket-hold") {
+        const result = await db(
+          "SELECT * FROM tickets WHERE channel_id=$1 AND status='open'",
+          [interaction.channel.id]
+        );
+
+        if (!result.rowCount) {
+          return replySafe(interaction, {
+            content: "❌ No active ticket.",
+            ephemeral: true
+          });
+        }
+
+        await db(
+          "UPDATE tickets SET status='hold', held=true, updated_at=NOW() WHERE id=$1",
+          [result.rows[0].id]
+        );
+
+        await interaction.channel.send(
+          `⏸️ Ticket placed on hold by ${interaction.user}.`
+        );
+
+        return replySafe(interaction, {
+          content: "✅ Ticket is now on hold.",
+          ephemeral: true
+        });
+      }
+
+      /* RESUME */
+
+      if (name === "ticket-resume") {
+        const result = await db(
+          "SELECT * FROM tickets WHERE channel_id=$1 AND status='hold'",
+          [interaction.channel.id]
+        );
+
+        if (!result.rowCount) {
+          return replySafe(interaction, {
+            content: "❌ No held ticket.",
+            ephemeral: true
+          });
+        }
+
+        await db(
+          "UPDATE tickets SET status='open', held=false, updated_at=NOW() WHERE id=$1",
+          [result.rows[0].id]
+        );
+
+        await interaction.channel.send(
+          `▶️ Ticket resumed by ${interaction.user}.`
+        );
+
+        return replySafe(interaction, {
+          content: "✅ Ticket resumed.",
+          ephemeral: true
+        });
+      }
+
+      /* REOPEN */
+
+      if (name === "ticket-reopen") {
+        await interaction.deferReply({ ephemeral: true });
+
+        const ticket = await getTicketById(
+          interaction.options.getInteger("id")
+        );
+
+        if (!ticket) {
+          return interaction.editReply("❌ Ticket not found.");
+        }
+
+        await db(
+          `UPDATE tickets
+           SET status='open', closed_at=NULL, updated_at=NOW()
+           WHERE id=$1`,
+          [ticket.id]
+        );
+
+        const channel = interaction.guild.channels.cache.get(
+          ticket.channel_id
+        );
+
+        if (channel) {
+          await channel.permissionOverwrites.edit(
+            ticket.user_id,
+            { SendMessages: true }
+          );
+
+          await channel.send(
+            `🔓 Ticket #${ticket.id} reopened by ${interaction.user}.`
+          );
+        }
+
+        return interaction.editReply("✅ Ticket reopened.");
+      }
+
+      /* NOTE */
+
+      if (name === "ticket-note") {
+        const result = await db(
+          "SELECT * FROM tickets WHERE channel_id=$1 AND status!='closed'",
+          [interaction.channel.id]
+        );
+
+        if (!result.rowCount) {
+          return replySafe(interaction, {
+            content: "❌ No ticket found.",
+            ephemeral: true
+          });
+        }
+
+        await db(
+          `INSERT INTO ticket_notes (ticket_id, staff_id, note)
+           VALUES ($1,$2,$3)`,
+          [
+            result.rows[0].id,
+            interaction.user.id,
+            interaction.options.getString("note")
+          ]
+        );
+
+        return replySafe(interaction, {
+          content: "📝 Internal note saved.",
+          ephemeral: true
+        });
+      }
+
+      /* HISTORY */
+
+      if (name === "ticket-history") {
+        const result = await db(
+          "SELECT * FROM tickets WHERE channel_id=$1 ORDER BY id DESC LIMIT 1",
+          [interaction.channel.id]
+        );
+
+        if (!result.rowCount) {
+          return replySafe(interaction, {
+            content: "❌ Ticket not found.",
+            ephemeral: true
+          });
+        }
+
+        const t = result.rows[0];
+
+        const messages = await db(
+          `SELECT * FROM ticket_messages
+           WHERE ticket_id=$1
+           ORDER BY created_at DESC LIMIT 10`,
+          [t.id]
+        );
+
+        const embed = new EmbedBuilder()
+          .setTitle(`📋 Ticket #${t.id} History`)
+          .addFields(
+            { name: "Player", value: `<@${t.user_id}>`, inline: true },
+            { name: "Status", value: t.status, inline: true },
+            {
+              name: "Claimed",
+              value: t.claimed_by ? `<@${t.claimed_by}>` : "Nobody",
+              inline: true
+            }
+          );
+
+        if (messages.rowCount) {
+          embed.addFields({
+            name: "Recent Messages",
+            value: messages.rows
+              .reverse()
+              .map(m =>
+                `**${m.direction}**: ${(m.content || "[attachment]").slice(0, 200)}`
+              )
+              .join("\n")
+              .slice(0, 1024)
+          });
+        }
+
+        return replySafe(interaction, {
+          embeds: [embed],
+          ephemeral: true
+        });
+      }
+
+      /* INFO */
+
+      if (name === "ticket-info") {
+        const result = await db(
+          "SELECT * FROM tickets WHERE channel_id=$1 ORDER BY id DESC LIMIT 1",
+          [interaction.channel.id]
+        );
+
+        if (!result.rowCount) {
+          return replySafe(interaction, {
+            content: "❌ This is not a ticket channel.",
+            ephemeral: true
+          });
+        }
+
+        const t = result.rows[0];
+
+        const embed = new EmbedBuilder()
+          .setTitle(`🎫 Ticket #${t.id}`)
+          .addFields(
+            { name: "Player", value: `<@${t.user_id}>`, inline: true },
+            { name: "Status", value: t.status, inline: true },
+            {
+              name: "Claimed By",
+              value: t.claimed_by ? `<@${t.claimed_by}>` : "Unclaimed",
+              inline: true
+            }
+          )
+          .setTimestamp();
+
+        return replySafe(interaction, {
+          embeds: [embed],
+          ephemeral: true
+        });
+      }
+
+      /* BLOCK */
+
+      if (name === "ticket-block") {
+        const user = interaction.options.getUser("user");
+        const reason =
+          interaction.options.getString("reason") || "No reason provided";
+
+        await db(
+          `INSERT INTO blocked_users
+           (guild_id,user_id,blocked_by,reason)
+           VALUES ($1,$2,$3,$4)
+           ON CONFLICT (guild_id,user_id)
+           DO UPDATE SET blocked_by=$3, reason=$4`,
+          [SERVER_ID, user.id, interaction.user.id, reason]
+        );
+
+        await logAction(
+          interaction.guild,
+          "🚫 Ticket Block",
+          `${user} was blocked from support.`,
+          [{ name: "Reason", value: reason }]
+        );
+
+        return replySafe(interaction, {
+          content: `🚫 ${user} has been blocked from support.`,
+          ephemeral: true
+        });
+      }
+
+      /* UNBLOCK */
+
+      if (name === "ticket-unblock") {
+        const user = interaction.options.getUser("user");
+
+        await db(
+          "DELETE FROM blocked_users WHERE guild_id=$1 AND user_id=$2",
+          [SERVER_ID, user.id]
+        );
+
+        return replySafe(interaction, {
+          content: `🔓 ${user} has been unblocked.`,
+          ephemeral: true
+        });
+      }
+
+      /* REPLY */
+
+      if (name === "reply") {
+        const ticket = await db(
+          "SELECT * FROM tickets WHERE channel_id=$1 AND status!='closed'",
+          [interaction.channel.id]
+        );
+
+        if (!ticket.rowCount) {
+          return replySafe(interaction, {
+            content: "❌ This is not an active ticket.",
+            ephemeral: true
+          });
+        }
+
+        const t = ticket.rows[0];
+        const message = interaction.options.getString("message");
+
+        const user = await client.users.fetch(t.user_id);
+
+        await user.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("💬 Grand Mafia Support")
+              .setDescription(message)
+              .setFooter({
+                text: `Ticket #${t.id}`
+              })
+              .setTimestamp()
+          ]
+        });
+
+        await db(
+          `INSERT INTO ticket_messages
+           (ticket_id,staff_id,direction,content)
+           VALUES ($1,$2,'STAFF_TO_PLAYER',$3)`,
+          [t.id, interaction.user.id, message]
+        );
+
+        await interaction.channel.send(
+          `💬 **Support reply sent:** ${message}`
+        );
+
+        return replySafe(interaction, {
+          content: "✅ Reply sent to player.",
+          ephemeral: true
+        });
+      }
+
+      /* WARN */
+
+      if (name === "warn") {
+        const user = interaction.options.getUser("user");
+        const reason = interaction.options.getString("reason");
+
+        await db(
+          `INSERT INTO warnings
+           (guild_id,user_id,moderator_id,reason)
+           VALUES ($1,$2,$3,$4)`,
+          [SERVER_ID, user.id, interaction.user.id, reason]
+        );
+
+        await db(
+          `INSERT INTO modlogs
+           (guild_id,user_id,moderator_id,action,reason)
+           VALUES ($1,$2,$3,'WARN',$4)`,
+          [SERVER_ID, user.id, interaction.user.id, reason]
+        );
+
+        try {
+          await user.send(`⚠️ You received a warning in Grand Mafia.\nReason: ${reason}`);
+        } catch {}
+
+        await logAction(
+          interaction.guild,
+          "⚠️ Warning",
+          `${user} received a warning.`,
+          [
+            { name: "Moderator", value: `${interaction.user}` },
+            { name: "Reason", value: reason }
+          ]
+        );
+
+        return replySafe(interaction, {
+          content: `⚠️ ${user} warned.`,
+          ephemeral: true
+        });
+      }
+
+      /* WARNINGS */
+
+      if (name === "warnings") {
+        const user = interaction.options.getUser("user");
+
+        const result = await db(
+          `SELECT * FROM warnings
+           WHERE guild_id=$1 AND user_id=$2
+           ORDER BY created_at DESC`,
+          [SERVER_ID, user.id]
+        );
+
+        if (!result.rowCount) {
+          return replySafe(interaction, {
+            content: `✅ ${user} has no warnings.`,
+            ephemeral: true
+          });
+        }
+
+        const text = result.rows
+          .slice(0, 15)
+          .map((w, i) =>
+            `**${i + 1}.** ${w.reason} — <@${w.moderator_id}>`
+          )
+          .join("\n");
+
+        return replySafe(interaction, {
+          embeds: [
+            new EmbedBuilder()
+              .setTitle(`⚠️ Warnings — ${user.tag}`)
+              .setDescription(text)
+          ],
+          ephemeral: true
+        });
+      }
+
+      /* CLEAR */
+
+      if (name === "clear") {
+        if (!interaction.channel?.isTextBased()) {
+          return replySafe(interaction, {
+            content: "❌ This command cannot be used here.",
+            ephemeral: true
+          });
+        }
+
+        const amount = interaction.options.getInteger("amount");
+
+        const deleted = await interaction.channel.bulkDelete(
+          amount,
+          true
+        );
+
+        return replySafe(interaction, {
+          content: `🧹 Deleted ${deleted.size} messages.`,
+          ephemeral: true
+        });
+      }
+
+      /* TIMEOUT */
+
+      if (name === "timeout") {
+        const user = interaction.options.getUser("user");
+        const minutes = interaction.options.getInteger("minutes");
+        const reason =
+          interaction.options.getString("reason") || "No reason provided";
+
+        const member =
+          interaction.guild.members.cache.get(user.id) ||
+          await interaction.guild.members.fetch(user.id).catch(() => null);
+
+        if (!member) {
+          return replySafe(interaction, {
+            content: "❌ Member not found.",
+            ephemeral: true
+          });
+        }
+
+        await member.timeout(
+          minutes * 60 * 1000,
+          reason
+        );
+
+        await db(
+          `INSERT INTO modlogs
+           (guild_id,user_id,moderator_id,action,reason)
+           VALUES ($1,$2,$3,'TIMEOUT',$4)`,
+          [SERVER_ID, user.id, interaction.user.id, reason]
+        );
+
+        await logAction(
+          interaction.guild,
+          "⏰ Timeout",
+          `${user} was timed out.`,
+          [
+            { name: "Duration", value: `${minutes} minutes` },
+            { name: "Reason", value: reason }
+          ]
+        );
+
+        return replySafe(interaction, {
+          content: `⏰ ${user} timed out for ${minutes} minutes.`,
+          ephemeral: true
+        });
+      }
+
+      /* UNTIMEOUT */
+
+      if (name === "untimeout") {
+        const user = interaction.options.getUser("user");
+
+        const member =
+          interaction.guild.members.cache.get(user.id) ||
+          await interaction.guild.members.fetch(user.id);
+
+        await member.timeout(null, "Timeout removed by staff");
+
+        return replySafe(interaction, {
+          content: `▶️ Timeout removed from ${user}.`,
+          ephemeral: true
+        });
+      }
+
+      /* KICK */
+
+      if (name === "kick") {
+        const user = interaction.options.getUser("user");
+        const reason =
+          interaction.options.getString("reason") || "No reason provided";
+
+        const member = await interaction.guild.members.fetch(user.id);
+
+        await member.kick(reason);
+
+        await db(
+          `INSERT INTO modlogs
+           (guild_id,user_id,moderator_id,action,reason)
+           VALUES ($1,$2,$3,'KICK',$4)`,
+          [SERVER_ID, user.id, interaction.user.id, reason]
+        );
+
+        return replySafe(interaction, {
+          content: `👢 ${user.tag} kicked.`,
+          ephemeral: true
+        });
+      }
+
+      /* BAN */
+
+      if (name === "ban") {
+        const user = interaction.options.getUser("user");
+        const reason =
+          interaction.options.getString("reason") || "No reason provided";
+
+        await interaction.guild.members.ban(user, {
+          reason
+        });
+
+        await db(
+          `INSERT INTO modlogs
+           (guild_id,user_id,moderator_id,action,reason)
+           VALUES ($1,$2,$3,'BAN',$4)`,
+          [SERVER_ID, user.id, interaction.user.id, reason]
+        );
+
+        return replySafe(interaction, {
+          content: `🔨 ${user.tag} banned.`,
+          ephemeral: true
+        });
+      }
+
+      /* UNBAN */
+
+      if (name === "unban") {
+        const id = interaction.options.getString("userid");
+
+        await interaction.guild.members.unban(id);
+
+        return replySafe(interaction, {
+          content: `🔓 User ${id} unbanned.`,
+          ephemeral: true
+        });
+      }
+
+      /* MODLOGS */
+
+      if (name === "modlogs") {
+        const user = interaction.options.getUser("user");
+
+        const result = await db(
+          `SELECT * FROM modlogs
+           WHERE guild_id=$1 AND user_id=$2
+           ORDER BY created_at DESC LIMIT 15`,
+          [SERVER_ID, user.id]
+        );
+
+        if (!result.rowCount) {
+          return replySafe(interaction, {
+            content: "No moderation records found.",
+            ephemeral: true
+          });
+        }
+
+        const text = result.rows
+          .map(m =>
+            `**${m.action}** — ${m.reason || "No reason"} — <@${m.moderator_id}>`
+          )
+          .join("\n");
+
+        return replySafe(interaction, {
+          embeds: [
+            new EmbedBuilder()
+              .setTitle(`📋 Moderation Logs — ${user.tag}`)
+              .setDescription(text.slice(0, 4000))
+          ],
+          ephemeral: true
+        });
+      }
+
+      /* AUTOMOD */
+
+      if (name === "automod") {
+        const setting = interaction.options.getString("setting");
+
+        if (!setting) {
+          const result = await db(
+            "SELECT * FROM settings WHERE guild_id=$1",
+            [SERVER_ID]
+          );
+
+          const s = result.rows[0];
+
+          return replySafe(interaction, {
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("🛡️ AutoMod Status")
+                .addFields(
+                  { name: "AutoMod", value: s.automod ? "🟢 ON" : "🔴 OFF" },
+                  { name: "Spam", value: s.spam ? "🟢 ON" : "🔴 OFF" },
+                  { name: "Links", value: s.links ? "🟢 ON" : "🔴 OFF" },
+                  { name: "Invites", value: s.invites ? "🟢 ON" : "🔴 OFF" },
+                  { name: "Mentions", value: s.mentions ? "🟢 ON" : "🔴 OFF" },
+                  { name: "Bad Words", value: s.badwords ? "🟢 ON" : "🔴 OFF" },
+                  { name: "Auto Timeout", value: s.auto_timeout ? "🟢 ON" : "🔴 OFF" }
+                )
+            ],
+            ephemeral: true
+          });
+        }
+
+        await db(
+          "UPDATE settings SET automod=$1 WHERE guild_id=$2",
+          [setting === "on", SERVER_ID]
+        );
+
+        return replySafe(interaction, {
+          content: `🛡️ AutoMod ${setting === "on" ? "enabled" : "disabled"}.`,
+          ephemeral: true
+        });
+      }
+
+      /* SECURITY */
+
+      if (name === "security") {
+        return replySafe(interaction, {
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("🔐 Grand Mafia Security")
+              .setDescription(
+                "Security systems are active.\n\n" +
+                "🛡️ Anti-spam\n" +
+                "🚫 Mass mention protection\n" +
+                "🔗 Link filtering\n" +
+                "🤬 Word filtering\n" +
+                "⏰ Automatic timeout\n" +
+                "🚨 Raid protection"
+              )
+          ],
+          ephemeral: true
+        });
+      }
+
+      /* ANNOUNCE */
+
+      if (name === "announce") {
+        const message = interaction.options.getString("message");
+        const image = interaction.options.getAttachment("image");
+
+        await interaction.deferReply({ ephemeral: true });
+
+        const embed = new EmbedBuilder()
+          .setTitle("📢 Grand Mafia Announcement")
+          .setDescription(message)
+          .setTimestamp()
+          .setFooter({
+            text: `Posted by ${interaction.user.tag}`
+          });
+
+        if (image) embed.setImage(image.url);
+
+        await interaction.channel.send({
+          embeds: [embed]
+        });
+
+        return interaction.editReply("✅ Announcement sent.");
+      }
+
+      /* SAY */
+
+      if (name === "say") {
+        const message = interaction.options.getString("message");
+        const image = interaction.options.getAttachment("image");
+
+        await interaction.deferReply({ ephemeral: true });
+
+        await interaction.channel.send({
+          content: message,
+          files: image ? [image.url] : []
+        });
+
+        return interaction.editReply("✅ Message sent.");
+      }
+
+      /* ADMIN STATS */
+
+      if (name === "admin-stats") {
+        const tickets = await db(
+          `SELECT COUNT(*)::int AS count
+           FROM tickets WHERE guild_id=$1`,
+          [SERVER_ID]
+        );
+
+        const open = await db(
+          `SELECT COUNT(*)::int AS count
+           FROM tickets WHERE guild_id=$1
+           AND status IN ('open','hold')`,
+          [SERVER_ID]
+        );
+
+        const warnings = await db(
+          `SELECT COUNT(*)::int AS count
+           FROM warnings WHERE guild_id=$1`,
+          [SERVER_ID]
+        );
+
+        return replySafe(interaction, {
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("📊 Grand Mafia Admin Statistics")
+              .addFields(
+                {
+                  name: "🎫 Total Tickets",
+                  value: String(tickets.rows[0].count),
+                  inline: true
+                },
+                {
+                  name: "🟢 Open Tickets",
+                  value: String(open.rows[0].count),
+                  inline: true
+                },
+                {
+                  name: "⚠️ Warnings",
+                  value: String(warnings.rows[0].count),
+                  inline: true
+                }
+              )
+          ],
+          ephemeral: true
+        });
+      }
+
+      /* PLAYER */
+
+      if (name === "player") {
+        const user = interaction.options.getUser("user");
+
+        const warnings = await db(
+          `SELECT COUNT(*)::int AS count
+           FROM warnings WHERE guild_id=$1 AND user_id=$2`,
+          [SERVER_ID, user.id]
+        );
+
+        const tickets = await db(
+          `SELECT COUNT(*)::int AS count
+           FROM tickets WHERE guild_id=$1 AND user_id=$2`,
+          [SERVER_ID, user.id]
+        );
+
+        return replySafe(interaction, {
+          embeds: [
+            new EmbedBuilder()
+              .setTitle(`👤 Player Information`)
+              .setThumbnail(user.displayAvatarURL())
+              .addFields(
+                { name: "Username", value: user.tag, inline: true },
+                { name: "ID", value: user.id, inline: true },
+                {
+                  name: "Warnings",
+                  value: String(warnings.rows[0].count),
+                  inline: true
+                },
+                {
+                  name: "Tickets",
+                  value: String(tickets.rows[0].count),
+                  inline: true
+                }
+              )
+          ],
+          ephemeral: true
+        });
+      }
+
+      /* SLOWMODE */
+
+      if (name === "slowmode") {
+        const seconds = interaction.options.getInteger("seconds");
+
+        await interaction.channel.setRateLimitPerUser(seconds);
+
+        return replySafe(interaction, {
+          content: `🐌 Slowmode set to ${seconds} seconds.`,
+          ephemeral: true
+        });
+      }
+
+      /* LOCK */
+
+      if (name === "lock") {
+        await interaction.channel.permissionOverwrites.edit(
+          interaction.guild.roles.everyone,
+          { SendMessages: false }
+        );
+
+        await interaction.channel.send("🔒 Channel locked.");
+
+        return replySafe(interaction, {
+          content: "✅ Channel locked.",
+          ephemeral: true
+        });
+      }
+
+      /* UNLOCK */
+
+      if (name === "unlock") {
+        await interaction.channel.permissionOverwrites.edit(
+          interaction.guild.roles.everyone,
+          { SendMessages: null }
+        );
+
+        await interaction.channel.send("🔓 Channel unlocked.");
+
+        return replySafe(interaction, {
+          content: "✅ Channel unlocked.",
+          ephemeral: true
+        });
+      }
     }
-);
+
+    /* =====================================================
+       BUTTONS
+    ===================================================== */
+
+    if (interaction.isButton()) {
+
+      const parts = interaction.customId.split("_");
+      const action = parts[1];
+      const ticketId = parts[2];
+
+      if (!interaction.member || !isStaff(interaction.member)) {
+        return replySafe(interaction, {
+          content: "❌ Staff only.",
+          ephemeral: true
+        });
+      }
+
+      const ticket = await getTicketById(ticketId);
+
+      if (!ticket) {
+        return replySafe(interaction, {
+          content: "❌ Ticket not found.",
+          ephemeral: true
+        });
+      }
+
+      if (action === "claim") {
+        await db(
+          "UPDATE tickets SET claimed_by=$1, updated_at=NOW() WHERE id=$2",
+          [interaction.user.id, ticket.id]
+        );
+
+        await interaction.channel.send(
+          `🎫 Ticket claimed by ${interaction.user}.`
+        );
+
+        return replySafe(interaction, {
+          content: "✅ Claimed.",
+          ephemeral: true
+        });
+      }
+
+      if (action === "hold") {
+        await db(
+          `UPDATE tickets SET status='hold',held=true,updated_at=NOW()
+           WHERE id=$1`,
+          [ticket.id]
+        );
+
+        return replySafe(interaction, {
+          content: "⏸️ Ticket placed on hold.",
+          ephemeral: true
+        });
+      }
+
+      if (action === "resume") {
+        await db(
+          `UPDATE tickets SET status='open',held=false,updated_at=NOW()
+           WHERE id=$1`,
+          [ticket.id]
+        );
+
+        return replySafe(interaction, {
+          content: "▶️ Ticket resumed.",
+          ephemeral: true
+        });
+      }
+
+      if (action === "close") {
+        await db(
+          `UPDATE tickets
+           SET status='closed',closed_at=NOW(),updated_at=NOW()
+           WHERE id=$1`,
+          [ticket.id]
+        );
+
+        await interaction.channel.send(
+          `🔴 Ticket #${ticket.id} closed by ${interaction.user}.`
+        );
+
+        return replySafe(interaction, {
+          content: "✅ Ticket closed.",
+          ephemeral: true
+        });
+      }
+
+      if (action === "info") {
+        return replySafe(interaction, {
+          embeds: [
+            new EmbedBuilder()
+              .setTitle(`👤 Player Info`)
+              .addFields(
+                {
+                  name: "Player",
+                  value: `<@${ticket.user_id}>`
+                },
+                {
+                  name: "Ticket",
+                  value: `#${ticket.id}`
+                },
+                {
+                  name: "Status",
+                  value: ticket.status
+                }
+              )
+          ],
+          ephemeral: true
+        });
+      }
+    }
+
+  } catch (err) {
+
+    console.error("Interaction error:", err);
+
+    await replySafe(interaction, {
+      content: "❌ An internal error occurred. Please try again.",
+      ephemeral: true
+    });
+  }
+});
 
 /* =========================================================
-   MESSAGE CREATE
+   MESSAGE HANDLER
 ========================================================= */
 
-client.on(
-    "messageCreate",
-    async message => {
+const spamMap = new Map();
+
+const BAD_WORDS = [
+  "badword1",
+  "badword2"
+];
+
+client.on("messageCreate", async message => {
+
+  try {
+
+    /* DM SUPPORT */
+
+    if (!message.guild) {
+
+      if (message.author.bot) return;
+
+      const guild = client.guilds.cache.get(SERVER_ID);
+
+      if (!guild) {
+        return message.reply(
+          "❌ Support server is currently unavailable."
+        );
+      }
+
+      const result = await createTicket(message.author, guild);
+
+      if (result.existing) {
+        await message.reply(
+          `🎫 You already have an open ticket: <#${result.ticket.channel_id}>`
+        );
+      } else {
+        await message.reply(
+          `✅ Your support ticket has been created: <#${result.ticket.channel_id}>`
+        );
+      }
+
+      const ticket = result.ticket;
+
+      await db(
+        `INSERT INTO ticket_messages
+         (ticket_id,user_id,direction,content,attachment_urls)
+         VALUES ($1,$2,'PLAYER_TO_STAFF',$3,$4)`,
+        [
+          ticket.id,
+          message.author.id,
+          message.content || "[attachment]",
+          message.attachments.map(a => a.url).join("\n")
+        ]
+      );
+
+      return;
+    }
+
+    if (message.author.bot) return;
+    if (message.guild.id !== SERVER_ID) return;
+
+    const settingsResult = await db(
+      "SELECT * FROM settings WHERE guild_id=$1",
+      [SERVER_ID]
+    );
+
+    const settings = settingsResult.rows[0];
+
+    /* STAFF EXEMPTION */
+
+    const member = message.member;
+
+    if (member && isStaff(member)) return;
+
+    /* MASS MENTION */
+
+    if (
+      settings.automod &&
+      settings.mentions &&
+      message.mentions.users.size +
+      message.mentions.roles.size >= 5
+    ) {
+
+      await message.delete().catch(() => {});
+
+      await db(
+        `INSERT INTO modlogs
+         (guild_id,user_id,moderator_id,action,reason)
+         VALUES ($1,$2,'AUTO','AUTO_TIMEOUT',$3)`,
+        [
+          SERVER_ID,
+          message.author.id,
+          "Mass mention protection"
+        ]
+      );
+
+      await member.timeout(
+        5 * 60 * 1000,
+        "Mass mention protection"
+      ).catch(() => {});
+
+      await logAction(
+        message.guild,
+        "🚫 Mass Mention Protection",
+        `${message.author} automatically timed out.`,
+        [{ name: "Duration", value: "5 minutes" }]
+      );
+
+      return;
+    }
+
+    /* INVITE FILTER */
+
+    const inviteRegex =
+      /(discord\.gg\/|discord\.com\/invite\/)/i;
+
+    if (
+      settings.automod &&
+      settings.invites &&
+      inviteRegex.test(message.content)
+    ) {
+
+      await message.delete().catch(() => {});
+
+      await member.timeout(
+        2 * 60 * 1000,
+        "Discord invite filtering"
+      ).catch(() => {});
+
+      await logAction(
+        message.guild,
+        "🔗 Invite Filter",
+        `${message.author} posted a Discord invite.`
+      );
+
+      return;
+    }
+
+    /* LINK FILTER */
+
+    const urlRegex =
+      /https?:\/\/[^\s]+/i;
+
+    if (
+      settings.automod &&
+      settings.links &&
+      urlRegex.test(message.content)
+    ) {
+
+      await message.delete().catch(() => {});
+
+      await logAction(
+        message.guild,
+        "🔗 Link Filter",
+        `${message.author} posted a link.`
+      );
+
+      return;
+    }
+
+    /* BAD WORD FILTER */
+
+    if (
+      settings.automod &&
+      settings.badwords &&
+      BAD_WORDS.some(word =>
+        message.content.toLowerCase().includes(word)
+      )
+    ) {
+
+      await message.delete().catch(() => {});
+
+      await member.timeout(
+        60 * 1000,
+        "Automatic word filter"
+      ).catch(() => {});
+
+      await logAction(
+        message.guild,
+        "🤬 Word Filter",
+        `${message.author} triggered the word filter.`
+      );
+
+      return;
+    }
+
+    /* SPAM */
+
+    if (settings.automod && settings.spam) {
+
+      const now = Date.now();
+      const data = spamMap.get(message.author.id) || [];
+
+      const recent = data.filter(
+        time => now - time < 5000
+      );
+
+      recent.push(now);
+      spamMap.set(message.author.id, recent);
+
+      if (recent.length >= 6) {
+
+        spamMap.delete(message.author.id);
+
+        await member.timeout(
+          60 * 1000,
+          "Automatic spam protection"
+        ).catch(() => {});
+
+        await logAction(
+          message.guild,
+          "🚨 Anti-Spam",
+          `${message.author} automatically timed out for spam.`,
+          [{ name: "Duration", value: "1 minute" }]
+        );
+      }
+    }
+
+    /* SAVE TICKET MESSAGE */
+
+    const ticketResult = await db(
+      `SELECT * FROM tickets
+       WHERE channel_id=$1
+       AND status IN ('open','hold')
+       LIMIT 1`,
+      [message.channel.id]
+    );
+
+    if (ticketResult.rowCount) {
+
+      const ticket = ticketResult.rows[0];
+
+      await db(
+        `INSERT INTO ticket_messages
+         (ticket_id,user_id,direction,content,attachment_urls)
+         VALUES ($1,$2,'STAFF_TO_PLAYER',$3,$4)`,
+        [
+          ticket.id,
+          message.author.id,
+          message.content || "[attachment]",
+          message.attachments.map(a => a.url).join("\n")
+        ]
+      );
+
+      await db(
+        "UPDATE tickets SET updated_at=NOW() WHERE id=$1",
+        [ticket.id]
+      );
+
+      if (message.author.id !== ticket.user_id) {
 
         try {
 
-            if (!message.guild) return;
+          const user = await client.users.fetch(ticket.user_id);
 
-            if (message.author.bot) {
-                return;
-            }
-
-            const member =
-                message.member;
-
-            /* =====================================
-               ADMIN BYPASS
-            ===================================== */
-
-            if (
-                member &&
-                (
-                    member.permissions.has(
-                        PermissionsBitField.Flags.Administrator
-                    ) ||
-                    member.roles.cache.has(
-                        SUPPORT_ADMIN_ROLE_ID
-                    )
-                )
-            ) {
-                return;
-            }
-
-            /* =====================================
-               MASS MENTION PROTECTION
-            ===================================== */
-
-            const mentionCount =
-                message.mentions.users.size +
-                message.mentions.roles.size;
-
-            if (
-                message.mentions.everyone ||
-                mentionCount >= 5
-            ) {
-
-                await message.delete()
-                    .catch(() => {});
-
-                if (
-                    member &&
-                    member.moderatable
-                ) {
-
-                    await member.timeout(
-                        5 * 60 * 1000,
-                        "Automatic mass mention protection"
-                    ).catch(() => {});
-
-                    await sendLog(
-                        message.guild,
-                        "🚨 Mass Mention Protection",
-                        `**User:** ${message.author}\n` +
-                        `**Mentions:** ${mentionCount}\n` +
-                        `**Action:** Automatic timeout`
-                    );
-                }
-
-                return;
-            }
-
-            /* =====================================
-               SPAM PROTECTION
-            ===================================== */
-
-            const userId =
-                message.author.id;
-
-            if (!spamTracker.has(userId)) {
-                spamTracker.set(
-                    userId,
-                    []
-                );
-            }
-
-            const messages =
-                spamTracker.get(
-                    userId
-                );
-
-            const now =
-                Date.now();
-
-            messages.push({
-                timestamp: now,
-                channel:
-                    message.channel.id
+          if (message.content) {
+            await user.send({
+              content: `💬 **Support:** ${message.content}`,
+              files: message.attachments.map(a => a.url)
             });
+          } else {
+            await user.send({
+              content: "📎 Support sent an attachment:",
+              files: message.attachments.map(a => a.url)
+            });
+          }
 
-            while (
-                messages.length &&
-                now -
-                    messages[0].timestamp >
-                    5000
-            ) {
-                messages.shift();
-            }
-
-            /*
-               6 messages in 5 seconds
-               = spam.
-            */
-
-            if (
-                messages.length >= 6
-            ) {
-
-                spamTracker.set(
-                    userId,
-                    []
-                );
-
-                await message.delete()
-                    .catch(() => {});
-
-                if (
-                    member &&
-                    member.moderatable
-                ) {
-
-                    await member.timeout(
-                        60 * 1000,
-                        "Automatic anti-spam protection"
-                    ).catch(() => {});
-
-                    await sendLog(
-                        message.guild,
-                        "🛡️ Anti-Spam Triggered",
-                        `**User:** ${message.author}\n` +
-                        `**Action:** 1 minute automatic timeout`
-                    );
-                }
-
-                return;
-            }
-
-        } catch (error) {
-
-            console.error(
-                "Message protection error:",
-                error
-            );
+        } catch {
+          await message.channel.send(
+            "⚠️ I couldn't DM the player. Their DMs may be disabled."
+          );
         }
+      }
     }
-);
+
+  } catch (err) {
+    console.error("Message error:", err.message);
+  }
+});
 
 /* =========================================================
-   MESSAGE DELETE LOG
+   AUTOMATIC INACTIVITY CLOSING
 ========================================================= */
 
-client.on(
-    "messageDelete",
-    async message => {
+setInterval(async () => {
 
-        if (!message.guild) return;
+  try {
 
-        if (message.author?.bot) {
-            return;
-        }
+    const result = await db(`
+      SELECT * FROM tickets
+      WHERE status IN ('open','hold')
+      AND updated_at < NOW() - INTERVAL '48 hours'
+    `);
 
-        await sendLog(
-            message.guild,
-            "🗑️ Message Deleted",
-            `**Author:** ${
-                message.author || "Unknown"
-            }\n` +
-            `**Channel:** ${message.channel}\n` +
-            `**Content:** ${
-                message.content || "Content unavailable"
-            }`
+    for (const ticket of result.rows) {
+
+      await db(
+        `UPDATE tickets
+         SET status='closed',closed_at=NOW(),updated_at=NOW()
+         WHERE id=$1`,
+        [ticket.id]
+      );
+
+      const guild = client.guilds.cache.get(ticket.guild_id);
+
+      if (!guild) continue;
+
+      const channel = guild.channels.cache.get(ticket.channel_id);
+
+      if (channel) {
+        await channel.send(
+          `⏰ Ticket #${ticket.id} automatically closed because of inactivity.`
         );
+      }
+
+      await logAction(
+        guild,
+        "⏰ Automatic Ticket Closure",
+        `Ticket #${ticket.id} closed after inactivity.`
+      );
     }
-);
 
-/* =========================================================
-   MESSAGE EDIT LOG
-========================================================= */
+  } catch (err) {
+    console.error("Inactivity check error:", err.message);
+  }
 
-client.on(
-    "messageUpdate",
-    async (oldMessage, newMessage) => {
-
-        if (!oldMessage.guild) return;
-
-        if (
-            oldMessage.author?.bot
-        ) {
-            return;
-        }
-
-        if (
-            oldMessage.content ===
-            newMessage.content
-        ) {
-            return;
-        }
-
-        await sendLog(
-            oldMessage.guild,
-            "✏️ Message Edited",
-            `**Author:** ${
-                oldMessage.author ||
-                "Unknown"
-            }\n` +
-            `**Channel:** ${oldMessage.channel}\n\n` +
-            `**Before:** ${
-                oldMessage.content ||
-                "Unavailable"
-            }\n\n` +
-            `**After:** ${
-                newMessage.content ||
-                "Unavailable"
-            }`
-        );
-    }
-);
+}, 30 * 60 * 1000);
 
 /* =========================================================
    ERROR HANDLING
 ========================================================= */
 
-client.on(
-    "error",
-    error => {
-        console.error(
-            "Discord client error:",
-            error
-        );
-    }
-);
+process.on("unhandledRejection", err => {
+  console.error("Unhandled rejection:", err);
+});
 
-process.on(
-    "unhandledRejection",
-    error => {
-        console.error(
-            "Unhandled promise rejection:",
-            error
-        );
-    }
-);
-
-process.on(
-    "uncaughtException",
-    error => {
-        console.error(
-            "Uncaught exception:",
-            error
-        );
-    }
-);
+process.on("uncaughtException", err => {
+  console.error("Uncaught exception:", err);
+});
 
 /* =========================================================
-   START BOT
+   START
 ========================================================= */
 
-async function startBot() {
+(async () => {
 
-    await registerCommands();
+  try {
 
-    await client.login(
-        TOKEN
-    );
-}
+    await initDatabase();
 
-startBot();
+    await client.login(TOKEN);
+
+  } catch (err) {
+
+    console.error("❌ Startup failed:", err);
+
+    process.exit(1);
+  }
+
+})();
