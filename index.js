@@ -7024,3 +7024,423 @@ client.on("interactionCreate", async interaction => {
 console.log(
   "✅ Part 17 loaded — AutoMod system active."
 );
+
+// =========================
+// PART 19 — VERIFICATION SYSTEM
+// =========================
+
+const verificationCooldown = new Map();
+
+// =========================
+// VERIFICATION CONFIG
+// =========================
+
+async function getVerificationConfig(guildId) {
+  try {
+    const result = await global.dbQuery(
+      `SELECT * FROM verification_config WHERE guild_id = $1`,
+      [guildId]
+    );
+
+    if (!result.rows.length) {
+      await global.dbQuery(
+        `
+        INSERT INTO verification_config
+        (guild_id, enabled)
+        VALUES ($1, false)
+        ON CONFLICT (guild_id) DO NOTHING
+        `,
+        [guildId]
+      );
+
+      return {
+        guild_id: guildId,
+        enabled: false,
+        role_id: null,
+        channel_id: null
+      };
+    }
+
+    return result.rows[0];
+
+  } catch (error) {
+    console.error(
+      "❌ Verification database error:",
+      error.message
+    );
+
+    return {
+      enabled: false,
+      role_id: null,
+      channel_id: null
+    };
+  }
+}
+
+// =========================
+// CREATE VERIFICATION PANEL
+// =========================
+
+async function createVerificationPanel(channel) {
+  const embed = new EmbedBuilder()
+    .setTitle("🛡️ Server Verification")
+    .setDescription(
+      "Welcome to the server!\n\n" +
+      "Click the **Verify** button below to verify yourself " +
+      "and gain access to the server."
+    )
+    .setFooter({
+      text: "Verification System"
+    })
+    .setTimestamp();
+
+  const button = new ButtonBuilder()
+    .setCustomId("verify_member")
+    .setLabel("Verify")
+    .setEmoji("✅")
+    .setStyle(ButtonStyle.Success);
+
+  const row = new ActionRowBuilder()
+    .addComponents(button);
+
+  return channel.send({
+    embeds: [embed],
+    components: [row]
+  });
+}
+
+// =========================
+// VERIFICATION BUTTON
+// =========================
+
+client.on("interactionCreate", async interaction => {
+  try {
+    if (!interaction.isButton()) return;
+
+    if (interaction.customId !== "verify_member") {
+      return;
+    }
+
+    if (!interaction.guild) {
+      return interaction.reply({
+        content: "❌ This button can only be used in a server.",
+        ephemeral: true
+      });
+    }
+
+    const guildId = interaction.guild.id;
+    const userId = interaction.user.id;
+
+    const config =
+      await getVerificationConfig(guildId);
+
+    if (!config.enabled) {
+      return interaction.reply({
+        content:
+          "❌ Verification is currently disabled.",
+        ephemeral: true
+      });
+    }
+
+    if (!config.role_id) {
+      return interaction.reply({
+        content:
+          "❌ Verification role has not been configured.",
+        ephemeral: true
+      });
+    }
+
+    // -------------------------
+    // COOLDOWN
+    // -------------------------
+
+    const cooldownKey =
+      `${guildId}:${userId}`;
+
+    const lastVerification =
+      verificationCooldown.get(cooldownKey);
+
+    if (
+      lastVerification &&
+      Date.now() - lastVerification < 5000
+    ) {
+      return interaction.reply({
+        content:
+          "⏳ Please wait a few seconds before trying again.",
+        ephemeral: true
+      });
+    }
+
+    verificationCooldown.set(
+      cooldownKey,
+      Date.now()
+    );
+
+    // -------------------------
+    // ROLE
+    // -------------------------
+
+    const role =
+      interaction.guild.roles.cache.get(
+        config.role_id
+      );
+
+    if (!role) {
+      return interaction.reply({
+        content:
+          "❌ The configured verification role no longer exists.",
+        ephemeral: true
+      });
+    }
+
+    const member =
+      interaction.guild.members.cache.get(
+        userId
+      );
+
+    if (!member) {
+      return interaction.reply({
+        content:
+          "❌ Could not find your server member profile.",
+        ephemeral: true
+      });
+    }
+
+    if (member.roles.cache.has(role.id)) {
+      return interaction.reply({
+        content:
+          "✅ You are already verified.",
+        ephemeral: true
+      });
+    }
+
+    if (!role.editable) {
+      return interaction.reply({
+        content:
+          "❌ I cannot assign this role. Move my bot role above the verification role.",
+        ephemeral: true
+      });
+    }
+
+    // -------------------------
+    // ADD ROLE
+    // -------------------------
+
+    await member.roles.add(
+      role,
+      "Server verification"
+    );
+
+    await interaction.reply({
+      content:
+        "✅ **Verification successful!** Welcome to the server.",
+      ephemeral: true
+    });
+
+    // -------------------------
+    // LOG
+    // -------------------------
+
+    if (
+      typeof global.sendLog === "function"
+    ) {
+      await global.sendLog(
+        guildId,
+        "VERIFICATION",
+        `${interaction.user.tag} verified successfully.`
+      ).catch(() => {});
+    }
+
+  } catch (error) {
+    console.error(
+      "❌ Verification button error:",
+      error.message
+    );
+
+    try {
+      if (!interaction.replied) {
+        await interaction.reply({
+          content:
+            "❌ Verification failed. Please contact staff.",
+          ephemeral: true
+        });
+      }
+    } catch {}
+  }
+});
+
+// =========================
+// VERIFICATION COMMAND
+// =========================
+
+client.on("interactionCreate", async interaction => {
+  try {
+    if (!interaction.isChatInputCommand()) return;
+    if (!interaction.guild) return;
+
+    if (
+      interaction.commandName !== "verification"
+    ) {
+      return;
+    }
+
+    if (
+      !interaction.member.permissions.has(
+        PermissionFlagsBits.ManageGuild
+      )
+    ) {
+      return interaction.reply({
+        content:
+          "❌ You need **Manage Server** permission.",
+        ephemeral: true
+      });
+    }
+
+    const enabled =
+      interaction.options.getBoolean(
+        "enabled"
+      );
+
+    await getVerificationConfig(
+      interaction.guild.id
+    );
+
+    await global.dbQuery(
+      `
+      UPDATE verification_config
+      SET enabled = $1
+      WHERE guild_id = $2
+      `,
+      [
+        enabled,
+        interaction.guild.id
+      ]
+    );
+
+    return interaction.reply({
+      content:
+        `🛡️ **Verification:** ${enabled ? "Enabled" : "Disabled"}`
+    });
+
+  } catch (error) {
+    console.error(
+      "❌ Verification command error:",
+      error.message
+    );
+
+    try {
+      if (!interaction.replied) {
+        await interaction.reply({
+          content:
+            "❌ Verification configuration failed.",
+          ephemeral: true
+        });
+      }
+    } catch {}
+  }
+});
+
+// =========================
+// VERIFICATION SETUP COMMAND
+// =========================
+
+client.on("interactionCreate", async interaction => {
+  try {
+    if (!interaction.isChatInputCommand()) return;
+    if (!interaction.guild) return;
+
+    if (
+      interaction.commandName !== "setup"
+    ) {
+      return;
+    }
+
+    if (
+      !interaction.member.permissions.has(
+        PermissionFlagsBits.Administrator
+      )
+    ) {
+      return;
+    }
+
+    const role =
+      interaction.guild.roles.cache.find(
+        r =>
+          r.name.toLowerCase() ===
+          "verified"
+      );
+
+    if (!role) {
+      return interaction.reply({
+        content:
+          "❌ Create a role named **Verified** first, then run `/setup` again.",
+        ephemeral: true
+      });
+    }
+
+    await global.dbQuery(
+      `
+      INSERT INTO verification_config
+      (guild_id, enabled, role_id, channel_id)
+      VALUES ($1, true, $2, $3)
+      ON CONFLICT (guild_id)
+      DO UPDATE SET
+        enabled = true,
+        role_id = $2,
+        channel_id = $3
+      `,
+      [
+        interaction.guild.id,
+        role.id,
+        interaction.channel.id
+      ]
+    );
+
+    await createVerificationPanel(
+      interaction.channel
+    );
+
+    return interaction.reply({
+      content:
+        "✅ Verification system configured successfully.",
+      ephemeral: true
+    });
+
+  } catch (error) {
+    console.error(
+      "❌ Verification setup error:",
+      error.message
+    );
+
+    try {
+      if (!interaction.replied) {
+        await interaction.reply({
+          content:
+            "❌ Verification setup failed.",
+          ephemeral: true
+        });
+      }
+    } catch {}
+  }
+});
+
+// =========================
+// CLEAN COOLDOWNS
+// =========================
+
+setInterval(() => {
+  const now = Date.now();
+
+  for (
+    const [key, timestamp]
+    of verificationCooldown.entries()
+  ) {
+    if (now - timestamp > 10000) {
+      verificationCooldown.delete(key);
+    }
+  }
+}, 30000);
+
+console.log(
+  "✅ Part 19 loaded — Verification system active."
+);
