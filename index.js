@@ -7646,3 +7646,386 @@ client.on("guildMemberAdd", async member => {
 console.log(
   "✅ Part 20 loaded — AutoRole system active."
 );
+
+
+// =========================
+// PART 21 — INVITE TRACKING
+// =========================
+
+const inviteCache = new Map();
+
+// =========================
+// LOAD SERVER INVITES
+// =========================
+
+async function loadGuildInvites(guild) {
+  try {
+    const invites = await guild.invites.fetch();
+
+    const inviteData = new Map();
+
+    invites.forEach(invite => {
+      inviteData.set(invite.code, {
+        uses: invite.uses || 0,
+        inviterId: invite.inviter?.id || null
+      });
+    });
+
+    inviteCache.set(guild.id, inviteData);
+
+    return inviteData;
+
+  } catch (error) {
+    console.error(
+      `❌ Failed to load invites for ${guild.name}:`,
+      error.message
+    );
+
+    return new Map();
+  }
+}
+
+// =========================
+// READY — CACHE INVITES
+// =========================
+
+client.once("ready", async () => {
+  console.log("🔎 Loading invite tracking...");
+
+  for (const guild of client.guilds.cache.values()) {
+    await loadGuildInvites(guild);
+  }
+
+  console.log("✅ Invite tracking ready.");
+});
+
+// =========================
+// INVITE CREATE
+// =========================
+
+client.on("inviteCreate", async invite => {
+  try {
+    const guild = invite.guild;
+
+    if (!guild) return;
+
+    let invites = inviteCache.get(guild.id);
+
+    if (!invites) {
+      invites = new Map();
+    }
+
+    invites.set(invite.code, {
+      uses: invite.uses || 0,
+      inviterId: invite.inviter?.id || null
+    });
+
+    inviteCache.set(guild.id, invites);
+
+  } catch (error) {
+    console.error(
+      "❌ Invite create tracking error:",
+      error.message
+    );
+  }
+});
+
+// =========================
+// INVITE DELETE
+// =========================
+
+client.on("inviteDelete", async invite => {
+  try {
+    const invites =
+      inviteCache.get(invite.guild?.id);
+
+    if (!invites) return;
+
+    invites.delete(invite.code);
+
+  } catch (error) {
+    console.error(
+      "❌ Invite delete tracking error:",
+      error.message
+    );
+  }
+});
+
+// =========================
+// MEMBER JOIN — FIND INVITER
+// =========================
+
+client.on("guildMemberAdd", async member => {
+  try {
+    const guild = member.guild;
+
+    const oldInvites =
+      inviteCache.get(guild.id) ||
+      new Map();
+
+    const newInvites =
+      await guild.invites.fetch();
+
+    let usedInvite = null;
+
+    for (const invite of newInvites.values()) {
+      const oldInvite =
+        oldInvites.get(invite.code);
+
+      const oldUses =
+        oldInvite?.uses || 0;
+
+      const newUses =
+        invite.uses || 0;
+
+      if (newUses > oldUses) {
+        usedInvite = invite;
+        break;
+      }
+    }
+
+    // Refresh cache
+    const updatedCache = new Map();
+
+    newInvites.forEach(invite => {
+      updatedCache.set(invite.code, {
+        uses: invite.uses || 0,
+        inviterId: invite.inviter?.id || null
+      });
+    });
+
+    inviteCache.set(
+      guild.id,
+      updatedCache
+    );
+
+    if (!usedInvite) {
+      console.log(
+        `⚠️ Could not determine inviter for ${member.user.tag}`
+      );
+
+      return;
+    }
+
+    const inviter =
+      usedInvite.inviter;
+
+    if (!inviter) return;
+
+    // =========================
+    // SAVE INVITE
+    // =========================
+
+    await global.dbQuery(
+      `
+      INSERT INTO invite_tracking
+      (
+        guild_id,
+        inviter_id,
+        invited_id,
+        invite_code
+      )
+      VALUES ($1, $2, $3, $4)
+      `,
+      [
+        guild.id,
+        inviter.id,
+        member.id,
+        usedInvite.code
+      ]
+    );
+
+    console.log(
+      `✅ ${member.user.tag} was invited by ${inviter.tag}`
+    );
+
+    // =========================
+    // LOG
+    // =========================
+
+    if (
+      typeof global.sendLog === "function"
+    ) {
+      await global.sendLog(
+        guild.id,
+        "INVITE",
+        `👤 ${member.user.tag}\n` +
+        `📨 Invited by: ${inviter.tag}\n` +
+        `🔗 Invite: ${usedInvite.code}`
+      ).catch(() => {});
+    }
+
+  } catch (error) {
+    console.error(
+      "❌ Invite tracking error:",
+      error.message
+    );
+  }
+});
+
+// =========================
+// /INVITES
+// =========================
+
+client.on("interactionCreate", async interaction => {
+  try {
+    if (!interaction.isChatInputCommand()) return;
+
+    if (
+      interaction.commandName !== "invites"
+    ) {
+      return;
+    }
+
+    if (!interaction.guild) return;
+
+    const user =
+      interaction.options.getUser("user") ||
+      interaction.user;
+
+    const result =
+      await global.dbQuery(
+        `
+        SELECT COUNT(*)::int AS total
+        FROM invite_tracking
+        WHERE guild_id = $1
+        AND inviter_id = $2
+        `,
+        [
+          interaction.guild.id,
+          user.id
+        ]
+      );
+
+    const total =
+      result.rows[0]?.total || 0;
+
+    const embed = new EmbedBuilder()
+      .setTitle("📨 Invite Statistics")
+      .setThumbnail(
+        user.displayAvatarURL({
+          size: 256
+        })
+      )
+      .addFields({
+        name: "👤 User",
+        value: `${user}`,
+        inline: true
+      })
+      .addFields({
+        name: "📨 Invites",
+        value: `${total}`,
+        inline: true
+      })
+      .setTimestamp();
+
+    return interaction.reply({
+      embeds: [embed]
+    });
+
+  } catch (error) {
+    console.error(
+      "❌ /invites error:",
+      error.message
+    );
+
+    if (!interaction.replied) {
+      await interaction.reply({
+        content:
+          "❌ Failed to get invite statistics.",
+        ephemeral: true
+      }).catch(() => {});
+    }
+  }
+});
+
+// =========================
+// /INVITELEADERBOARD
+// =========================
+
+client.on("interactionCreate", async interaction => {
+  try {
+    if (!interaction.isChatInputCommand()) return;
+
+    if (
+      interaction.commandName !==
+      "inviteleaderboard"
+    ) {
+      return;
+    }
+
+    if (!interaction.guild) return;
+
+    const result =
+      await global.dbQuery(
+        `
+        SELECT
+          inviter_id,
+          COUNT(*)::int AS total
+        FROM invite_tracking
+        WHERE guild_id = $1
+        GROUP BY inviter_id
+        ORDER BY total DESC
+        LIMIT 10
+        `,
+        [interaction.guild.id]
+      );
+
+    if (!result.rows.length) {
+      return interaction.reply({
+        content:
+          "📨 No invite statistics available yet."
+      });
+    }
+
+    let description = "";
+
+    for (
+      let i = 0;
+      i < result.rows.length;
+      i++
+    ) {
+      const row = result.rows[i];
+
+      const user =
+        await client.users.fetch(
+          row.inviter_id
+        ).catch(() => null);
+
+      const name =
+        user
+          ? user.tag
+          : `Unknown User (${row.inviter_id})`;
+
+      description +=
+        `**${i + 1}.** ${name} — **${row.total} invites**\n`;
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle("🏆 Invite Leaderboard")
+      .setDescription(description)
+      .setTimestamp();
+
+    return interaction.reply({
+      embeds: [embed]
+    });
+
+  } catch (error) {
+    console.error(
+      "❌ /inviteleaderboard error:",
+      error.message
+    );
+
+    if (!interaction.replied) {
+      await interaction.reply({
+        content:
+          "❌ Failed to load invite leaderboard.",
+        ephemeral: true
+      }).catch(() => {});
+    }
+  }
+});
+
+console.log(
+  "✅ Part 21 loaded — Invite tracking active."
+);
