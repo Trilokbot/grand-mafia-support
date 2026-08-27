@@ -5270,3 +5270,520 @@ global.db = pool;
 global.dbQuery = dbQuery;
 
 console.log("✅ Part 14 loaded — PostgreSQL database system active.");
+
+
+// =========================
+// PART 15 — MODERATION SYSTEM
+// =========================
+
+const { PermissionFlagsBits } = require("discord.js");
+
+async function createModerationCase(
+  guildId,
+  userId,
+  moderatorId,
+  action,
+  reason
+) {
+  try {
+    const result = await global.dbQuery(
+      `
+      INSERT INTO moderation_cases
+      (guild_id, user_id, moderator_id, action, reason)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id
+      `,
+      [
+        guildId,
+        userId,
+        moderatorId,
+        action,
+        reason || "No reason provided"
+      ]
+    );
+
+    return result.rows[0].id;
+  } catch (error) {
+    console.error("❌ Could not create moderation case:", error.message);
+    return null;
+  }
+}
+
+async function addWarning(
+  guildId,
+  userId,
+  moderatorId,
+  reason
+) {
+  try {
+    const result = await global.dbQuery(
+      `
+      INSERT INTO warnings
+      (guild_id, user_id, moderator_id, reason)
+      VALUES ($1, $2, $3, $4)
+      RETURNING id
+      `,
+      [
+        guildId,
+        userId,
+        moderatorId,
+        reason || "No reason provided"
+      ]
+    );
+
+    return result.rows[0].id;
+  } catch (error) {
+    console.error("❌ Could not add warning:", error.message);
+    return null;
+  }
+}
+
+async function getWarnings(guildId, userId) {
+  const result = await global.dbQuery(
+    `
+    SELECT *
+    FROM warnings
+    WHERE guild_id = $1
+    AND user_id = $2
+    ORDER BY created_at DESC
+    `,
+    [guildId, userId]
+  );
+
+  return result.rows;
+}
+
+async function clearWarnings(guildId, userId) {
+  await global.dbQuery(
+    `
+    DELETE FROM warnings
+    WHERE guild_id = $1
+    AND user_id = $2
+    `,
+    [guildId, userId]
+  );
+}
+
+// Check whether moderator can manage target
+function canModerateMember(interaction, target) {
+  if (!interaction.guild) return false;
+
+  const moderator = interaction.member;
+
+  if (!moderator.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+    return false;
+  }
+
+  if (!target) return false;
+
+  if (target.id === interaction.user.id) return false;
+
+  if (target.id === interaction.guild.ownerId) return false;
+
+  if (
+    interaction.user.id !== interaction.guild.ownerId &&
+    target.roles.highest.position >= moderator.roles.highest.position
+  ) {
+    return false;
+  }
+
+  if (
+    interaction.guild.members.me &&
+    target.roles.highest.position >=
+      interaction.guild.members.me.roles.highest.position
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+// =========================
+// MODERATION COMMANDS
+// =========================
+
+client.on("interactionCreate", async interaction => {
+  if (!interaction.isChatInputCommand()) return;
+
+  try {
+    if (!interaction.guild) return;
+
+    const command = interaction.commandName;
+
+    // BAN
+    if (command === "ban") {
+      if (
+        !interaction.member.permissions.has(
+          PermissionFlagsBits.BanMembers
+        )
+      ) {
+        return interaction.reply({
+          content: "❌ You do not have permission to ban members.",
+          ephemeral: true
+        });
+      }
+
+      const user = interaction.options.getUser("user");
+      const reason =
+        interaction.options.getString("reason") ||
+        "No reason provided";
+
+      const target = await interaction.guild.members
+        .fetch(user.id)
+        .catch(() => null);
+
+      if (!target) {
+        return interaction.reply({
+          content: "❌ That member is not in this server.",
+          ephemeral: true
+        });
+      }
+
+      if (!canModerateMember(interaction, target)) {
+        return interaction.reply({
+          content:
+            "❌ You cannot moderate this member because of the role hierarchy.",
+          ephemeral: true
+        });
+      }
+
+      await target.ban({
+        reason: `${reason} | Moderator: ${interaction.user.tag}`
+      });
+
+      const caseId = await createModerationCase(
+        interaction.guild.id,
+        user.id,
+        interaction.user.id,
+        "BAN",
+        reason
+      );
+
+      return interaction.reply({
+        content:
+          `🔨 **${user.tag}** has been banned.\n` +
+          `Reason: **${reason}**\n` +
+          `Case: **#${caseId || "N/A"}**`
+      });
+    }
+
+    // KICK
+    if (command === "kick") {
+      if (
+        !interaction.member.permissions.has(
+          PermissionFlagsBits.KickMembers
+        )
+      ) {
+        return interaction.reply({
+          content: "❌ You do not have permission to kick members.",
+          ephemeral: true
+        });
+      }
+
+      const user = interaction.options.getUser("user");
+      const reason =
+        interaction.options.getString("reason") ||
+        "No reason provided";
+
+      const target = await interaction.guild.members
+        .fetch(user.id)
+        .catch(() => null);
+
+      if (!target) {
+        return interaction.reply({
+          content: "❌ That member is not in this server.",
+          ephemeral: true
+        });
+      }
+
+      if (!canModerateMember(interaction, target)) {
+        return interaction.reply({
+          content:
+            "❌ You cannot moderate this member because of the role hierarchy.",
+          ephemeral: true
+        });
+      }
+
+      await target.kick(
+        `${reason} | Moderator: ${interaction.user.tag}`
+      );
+
+      const caseId = await createModerationCase(
+        interaction.guild.id,
+        user.id,
+        interaction.user.id,
+        "KICK",
+        reason
+      );
+
+      return interaction.reply({
+        content:
+          `👢 **${user.tag}** has been kicked.\n` +
+          `Reason: **${reason}**\n` +
+          `Case: **#${caseId || "N/A"}**`
+      });
+    }
+
+    // TIMEOUT
+    if (command === "timeout") {
+      if (
+        !interaction.member.permissions.has(
+          PermissionFlagsBits.ModerateMembers
+        )
+      ) {
+        return interaction.reply({
+          content:
+            "❌ You do not have permission to timeout members.",
+          ephemeral: true
+        });
+      }
+
+      const user = interaction.options.getUser("user");
+      const minutes = interaction.options.getInteger("minutes");
+      const reason =
+        interaction.options.getString("reason") ||
+        "No reason provided";
+
+      const target = await interaction.guild.members
+        .fetch(user.id)
+        .catch(() => null);
+
+      if (!target) {
+        return interaction.reply({
+          content: "❌ That member is not in this server.",
+          ephemeral: true
+        });
+      }
+
+      if (!canModerateMember(interaction, target)) {
+        return interaction.reply({
+          content:
+            "❌ You cannot moderate this member because of the role hierarchy.",
+          ephemeral: true
+        });
+      }
+
+      await target.timeout(
+        minutes * 60 * 1000,
+        `${reason} | Moderator: ${interaction.user.tag}`
+      );
+
+      const caseId = await createModerationCase(
+        interaction.guild.id,
+        user.id,
+        interaction.user.id,
+        "TIMEOUT",
+        reason
+      );
+
+      return interaction.reply({
+        content:
+          `⏱️ **${user.tag}** has been timed out for **${minutes} minute(s)**.\n` +
+          `Reason: **${reason}**\n` +
+          `Case: **#${caseId || "N/A"}**`
+      });
+    }
+
+    // UNTIMEOUT
+    if (command === "untimeout") {
+      if (
+        !interaction.member.permissions.has(
+          PermissionFlagsBits.ModerateMembers
+        )
+      ) {
+        return interaction.reply({
+          content:
+            "❌ You do not have permission to remove timeouts.",
+          ephemeral: true
+        });
+      }
+
+      const user = interaction.options.getUser("user");
+
+      const target = await interaction.guild.members
+        .fetch(user.id)
+        .catch(() => null);
+
+      if (!target) {
+        return interaction.reply({
+          content: "❌ That member is not in this server.",
+          ephemeral: true
+        });
+      }
+
+      if (!canModerateMember(interaction, target)) {
+        return interaction.reply({
+          content:
+            "❌ You cannot moderate this member because of the role hierarchy.",
+          ephemeral: true
+        });
+      }
+
+      await target.timeout(null, "Timeout removed");
+
+      const caseId = await createModerationCase(
+        interaction.guild.id,
+        user.id,
+        interaction.user.id,
+        "UNTIMEOUT",
+        "Timeout removed"
+      );
+
+      return interaction.reply({
+        content:
+          `🔓 Timeout removed from **${user.tag}**.\n` +
+          `Case: **#${caseId || "N/A"}**`
+      });
+    }
+
+    // WARN
+    if (command === "warn") {
+      if (
+        !interaction.member.permissions.has(
+          PermissionFlagsBits.ModerateMembers
+        )
+      ) {
+        return interaction.reply({
+          content: "❌ You do not have permission to warn members.",
+          ephemeral: true
+        });
+      }
+
+      const user = interaction.options.getUser("user");
+      const reason = interaction.options.getString("reason");
+
+      const target = await interaction.guild.members
+        .fetch(user.id)
+        .catch(() => null);
+
+      if (!target) {
+        return interaction.reply({
+          content: "❌ That member is not in this server.",
+          ephemeral: true
+        });
+      }
+
+      if (!canModerateMember(interaction, target)) {
+        return interaction.reply({
+          content:
+            "❌ You cannot warn this member because of the role hierarchy.",
+          ephemeral: true
+        });
+      }
+
+      const warningId = await addWarning(
+        interaction.guild.id,
+        user.id,
+        interaction.user.id,
+        reason
+      );
+
+      const caseId = await createModerationCase(
+        interaction.guild.id,
+        user.id,
+        interaction.user.id,
+        "WARN",
+        reason
+      );
+
+      return interaction.reply({
+        content:
+          `⚠️ **${user.tag}** has been warned.\n` +
+          `Reason: **${reason}**\n` +
+          `Warning: **#${warningId || "N/A"}**\n` +
+          `Case: **#${caseId || "N/A"}**`
+      });
+    }
+
+    // WARNINGS
+    if (command === "warnings") {
+      if (
+        !interaction.member.permissions.has(
+          PermissionFlagsBits.ModerateMembers
+        )
+      ) {
+        return interaction.reply({
+          content:
+            "❌ You do not have permission to view warnings.",
+          ephemeral: true
+        });
+      }
+
+      const user = interaction.options.getUser("user");
+
+      const warnings = await getWarnings(
+        interaction.guild.id,
+        user.id
+      );
+
+      if (!warnings.length) {
+        return interaction.reply({
+          content: `✅ **${user.tag}** has no warnings.`,
+          ephemeral: true
+        });
+      }
+
+      const text = warnings
+        .slice(0, 10)
+        .map(
+          (warning, index) =>
+            `**${index + 1}.** ${warning.reason}\n` +
+            `Moderator: <@${warning.moderator_id}>`
+        )
+        .join("\n\n");
+
+      return interaction.reply({
+        content:
+          `⚠️ **Warnings for ${user.tag}**\n\n${text}`,
+        ephemeral: true
+      });
+    }
+
+    // CLEAR WARNINGS
+    if (command === "clearwarnings") {
+      if (
+        !interaction.member.permissions.has(
+          PermissionFlagsBits.ModerateMembers
+        )
+      ) {
+        return interaction.reply({
+          content:
+            "❌ You do not have permission to clear warnings.",
+          ephemeral: true
+        });
+      }
+
+      const user = interaction.options.getUser("user");
+
+      await clearWarnings(
+        interaction.guild.id,
+        user.id
+      );
+
+      return interaction.reply({
+        content:
+          `🧹 All warnings for **${user.tag}** have been cleared.`
+      });
+    }
+
+  } catch (error) {
+    console.error("❌ Moderation system error:");
+    console.error(error);
+
+    try {
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({
+          content: "❌ An error occurred while executing this command.",
+          ephemeral: true
+        });
+      } else {
+        await interaction.reply({
+          content: "❌ An error occurred while executing this command.",
+          ephemeral: true
+        });
+      }
+    } catch {}
+  }
+});
+
+console.log("✅ Part 15 loaded — moderation system active.");
