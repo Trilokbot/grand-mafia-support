@@ -4522,3 +4522,508 @@ ensureActivityTables()
       error.message
     );
   });
+
+// ============================================================
+// PART 12 — ROLE + CHANNEL MANAGEMENT
+// ============================================================
+
+async function handleAddRole(interaction) {
+  if (!interaction.memberPermissions?.has("ManageRoles")) {
+    return interaction.reply({
+      content: "❌ You need **Manage Roles** permission.",
+      ephemeral: true
+    });
+  }
+
+  const user = interaction.options.getMember("user");
+  const role = interaction.options.getRole("role");
+
+  if (!user || !role) {
+    return interaction.reply({
+      content: "❌ Invalid member or role.",
+      ephemeral: true
+    });
+  }
+
+  const botRole = interaction.guild.members.me?.roles.highest;
+
+  if (!botRole || role.position >= botRole.position) {
+    return interaction.reply({
+      content: "❌ I cannot manage that role. Move my bot role above it.",
+      ephemeral: true
+    });
+  }
+
+  try {
+    await user.roles.add(role, `Added by ${interaction.user.tag}`);
+
+    await interaction.reply({
+      content: `✅ Added ${role} to **${user.user.tag}**.`,
+      ephemeral: true
+    });
+
+    const embed = new EmbedBuilder()
+      .setTitle("➕ Role Added")
+      .addFields(
+        { name: "Member", value: `${user.user}`, inline: true },
+        { name: "Role", value: `${role}`, inline: true },
+        { name: "Moderator", value: `${interaction.user}`, inline: true }
+      )
+      .setTimestamp();
+
+    await sendLog(interaction.guild, embed, true);
+
+  } catch (error) {
+    console.error("❌ Add role error:", error.message);
+
+    if (!interaction.replied) {
+      await interaction.reply({
+        content: "❌ Failed to add the role.",
+        ephemeral: true
+      });
+    }
+  }
+}
+
+
+// ============================================================
+// REMOVE ROLE
+// ============================================================
+
+async function handleRemoveRole(interaction) {
+  if (!interaction.memberPermissions?.has("ManageRoles")) {
+    return interaction.reply({
+      content: "❌ You need **Manage Roles** permission.",
+      ephemeral: true
+    });
+  }
+
+  const user = interaction.options.getMember("user");
+  const role = interaction.options.getRole("role");
+
+  if (!user || !role) {
+    return interaction.reply({
+      content: "❌ Invalid member or role.",
+      ephemeral: true
+    });
+  }
+
+  const botRole = interaction.guild.members.me?.roles.highest;
+
+  if (!botRole || role.position >= botRole.position) {
+    return interaction.reply({
+      content: "❌ I cannot manage that role.",
+      ephemeral: true
+    });
+  }
+
+  try {
+    await user.roles.remove(
+      role,
+      `Removed by ${interaction.user.tag}`
+    );
+
+    await interaction.reply({
+      content: `✅ Removed ${role} from **${user.user.tag}**.`,
+      ephemeral: true
+    });
+
+    const embed = new EmbedBuilder()
+      .setTitle("➖ Role Removed")
+      .addFields(
+        { name: "Member", value: `${user.user}`, inline: true },
+        { name: "Role", value: `${role}`, inline: true },
+        { name: "Moderator", value: `${interaction.user}`, inline: true }
+      )
+      .setTimestamp();
+
+    await sendLog(interaction.guild, embed, true);
+
+  } catch (error) {
+    console.error("❌ Remove role error:", error.message);
+
+    if (!interaction.replied) {
+      await interaction.reply({
+        content: "❌ Failed to remove the role.",
+        ephemeral: true
+      });
+    }
+  }
+}
+
+
+// ============================================================
+// NICKNAME
+// ============================================================
+
+async function handleNickname(interaction) {
+  if (!interaction.memberPermissions?.has("ManageNicknames")) {
+    return interaction.reply({
+      content: "❌ You need **Manage Nicknames** permission.",
+      ephemeral: true
+    });
+  }
+
+  const user = interaction.options.getMember("user");
+  const name = interaction.options.getString("name");
+
+  if (!user) {
+    return interaction.reply({
+      content: "❌ Member not found.",
+      ephemeral: true
+    });
+  }
+
+  if (name.length > 32) {
+    return interaction.reply({
+      content: "❌ Nickname cannot exceed 32 characters.",
+      ephemeral: true
+    });
+  }
+
+  try {
+    await user.setNickname(
+      name,
+      `Changed by ${interaction.user.tag}`
+    );
+
+    await interaction.reply({
+      content: `✅ Nickname changed for **${user.user.tag}**.`,
+      ephemeral: true
+    });
+
+    const embed = new EmbedBuilder()
+      .setTitle("✏️ Nickname Changed")
+      .addFields(
+        { name: "Member", value: `${user.user}`, inline: true },
+        { name: "New Nickname", value: name, inline: true },
+        { name: "Changed By", value: `${interaction.user}`, inline: true }
+      )
+      .setTimestamp();
+
+    await sendLog(interaction.guild, embed, true);
+
+  } catch (error) {
+    console.error("❌ Nickname error:", error.message);
+
+    if (!interaction.replied) {
+      await interaction.reply({
+        content: "❌ Failed to change nickname.",
+        ephemeral: true
+      });
+    }
+  }
+}
+
+
+// ============================================================
+// CHANNEL INFO
+// ============================================================
+
+async function handleChannelInfo(interaction) {
+  const channel = interaction.channel;
+
+  const embed = new EmbedBuilder()
+    .setTitle("📺 Channel Information")
+    .addFields(
+      {
+        name: "Name",
+        value: channel.name,
+        inline: true
+      },
+      {
+        name: "ID",
+        value: channel.id,
+        inline: true
+      },
+      {
+        name: "Type",
+        value: String(channel.type),
+        inline: true
+      },
+      {
+        name: "Created",
+        value: `<t:${Math.floor(
+          channel.createdTimestamp / 1000
+        )}:F>`,
+        inline: false
+      }
+    )
+    .setTimestamp();
+
+  return interaction.reply({
+    embeds: [embed]
+  });
+}
+
+
+// ============================================================
+// RENAME CHANNEL
+// ============================================================
+
+async function handleRenameChannel(interaction) {
+  if (!interaction.memberPermissions?.has("ManageChannels")) {
+    return interaction.reply({
+      content: "❌ You need **Manage Channels** permission.",
+      ephemeral: true
+    });
+  }
+
+  const name = interaction.options.getString("name");
+
+  if (!name || name.length > 100) {
+    return interaction.reply({
+      content: "❌ Channel name must be between 1 and 100 characters.",
+      ephemeral: true
+    });
+  }
+
+  try {
+    const oldName = interaction.channel.name;
+
+    await interaction.channel.setName(
+      name,
+      `Renamed by ${interaction.user.tag}`
+    );
+
+    await interaction.reply({
+      content: `✅ Channel renamed from **${oldName}** to **${name}**.`,
+      ephemeral: true
+    });
+
+    const embed = new EmbedBuilder()
+      .setTitle("✏️ Channel Renamed")
+      .addFields(
+        { name: "Old Name", value: oldName, inline: true },
+        { name: "New Name", value: name, inline: true },
+        { name: "Changed By", value: `${interaction.user}`, inline: true }
+      )
+      .setTimestamp();
+
+    await sendLog(interaction.guild, embed);
+
+  } catch (error) {
+    console.error("❌ Rename channel error:", error.message);
+
+    if (!interaction.replied) {
+      await interaction.reply({
+        content: "❌ Failed to rename the channel.",
+        ephemeral: true
+      });
+    }
+  }
+}
+
+
+// ============================================================
+// ROLE INFO
+// ============================================================
+
+async function handleRoleInfo(interaction) {
+  const role = interaction.options.getRole("role");
+
+  if (!role) {
+    return interaction.reply({
+      content: "❌ Role not found.",
+      ephemeral: true
+    });
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle("🎭 Role Information")
+    .addFields(
+      {
+        name: "Role",
+        value: `${role}`,
+        inline: true
+      },
+      {
+        name: "ID",
+        value: role.id,
+        inline: true
+      },
+      {
+        name: "Members",
+        value: String(role.members.size),
+        inline: true
+      },
+      {
+        name: "Position",
+        value: String(role.position),
+        inline: true
+      },
+      {
+        name: "Mentionable",
+        value: role.mentionable ? "Yes" : "No",
+        inline: true
+      },
+      {
+        name: "Managed",
+        value: role.managed ? "Yes" : "No",
+        inline: true
+      }
+    )
+    .setTimestamp();
+
+  return interaction.reply({
+    embeds: [embed]
+  });
+}
+
+
+// ============================================================
+// ROLE LIST
+// ============================================================
+
+async function handleRoleList(interaction) {
+  const roles = [...interaction.guild.roles.cache.values()]
+    .filter(role => role.id !== interaction.guild.id)
+    .sort((a, b) => b.position - a.position);
+
+  if (!roles.length) {
+    return interaction.reply({
+      content: "❌ No roles found.",
+      ephemeral: true
+    });
+  }
+
+  const text = roles
+    .map(
+      (role, index) =>
+        `**${index + 1}.** ${role} — \`${role.id}\``
+    )
+    .join("\n");
+
+  const embed = new EmbedBuilder()
+    .setTitle("🎭 Server Roles")
+    .setDescription(text.slice(0, 4000))
+    .setFooter({
+      text: `${roles.length} roles`
+    })
+    .setTimestamp();
+
+  return interaction.reply({
+    embeds: [embed]
+  });
+}
+
+
+// ============================================================
+// CHANNEL LIST
+// ============================================================
+
+async function handleChannelList(interaction) {
+  const channels = [...interaction.guild.channels.cache.values()];
+
+  if (!channels.length) {
+    return interaction.reply({
+      content: "❌ No channels found.",
+      ephemeral: true
+    });
+  }
+
+  const categories = channels.filter(
+    channel => channel.type === 4
+  );
+
+  const textChannels = channels.filter(
+    channel =>
+      channel.type === 0 ||
+      channel.type === 5 ||
+      channel.type === 15
+  );
+
+  const voiceChannels = channels.filter(
+    channel =>
+      channel.type === 2 ||
+      channel.type === 13
+  );
+
+  let description = "";
+
+  if (categories.length) {
+    description += "**📁 Categories**\n";
+    description += categories
+      .map(channel => `• ${channel.name}`)
+      .join("\n");
+    description += "\n\n";
+  }
+
+  if (textChannels.length) {
+    description += "**💬 Text Channels**\n";
+    description += textChannels
+      .map(channel => `• ${channel}`)
+      .join("\n");
+    description += "\n\n";
+  }
+
+  if (voiceChannels.length) {
+    description += "**🔊 Voice Channels**\n";
+    description += voiceChannels
+      .map(channel => `• ${channel.name}`)
+      .join("\n");
+  }
+
+  if (!description) {
+    description = "No channels available.";
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle("📋 Server Channels")
+    .setDescription(description.slice(0, 4000))
+    .setTimestamp();
+
+  return interaction.reply({
+    embeds: [embed]
+  });
+}
+
+
+// ============================================================
+// PART 12 COMMAND ROUTER
+// ============================================================
+
+// Add these cases to your EXISTING command router.
+// Do NOT create another interactionCreate router.
+
+async function handlePart12Commands(interaction) {
+  switch (interaction.commandName) {
+
+    case "addrole":
+      await handleAddRole(interaction);
+      return true;
+
+    case "removerole":
+      await handleRemoveRole(interaction);
+      return true;
+
+    case "nickname":
+      await handleNickname(interaction);
+      return true;
+
+    case "channelinfo":
+      await handleChannelInfo(interaction);
+      return true;
+
+    case "renamechannel":
+      await handleRenameChannel(interaction);
+      return true;
+
+    case "roleinfo":
+      await handleRoleInfo(interaction);
+      return true;
+
+    case "rolelist":
+      await handleRoleList(interaction);
+      return true;
+
+    case "channel-list":
+      await handleChannelList(interaction);
+      return true;
+
+    default:
+      return false;
+  }
+}
+
+console.log("✅ Part 12 Role & Channel Management loaded.");
