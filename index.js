@@ -5132,3 +5132,141 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 console.log("✅ Part 13 loaded — error handling and safety guards active.");
+
+const { Pool } = require("pg");
+
+// =========================
+// PART 14 — POSTGRESQL
+// =========================
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === "production"
+    ? { rejectUnauthorized: false }
+    : false
+});
+
+pool.on("error", error => {
+  console.error("❌ PostgreSQL pool error:");
+  console.error(error);
+});
+
+// Test database connection
+async function testDatabase() {
+  try {
+    const result = await pool.query("SELECT NOW()");
+    console.log(`✅ PostgreSQL connected: ${result.rows[0].now}`);
+  } catch (error) {
+    console.error("❌ PostgreSQL connection failed:");
+    console.error(error.message);
+  }
+}
+
+// Create required tables
+async function initializeDatabase() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS warnings (
+        id SERIAL PRIMARY KEY,
+        guild_id VARCHAR(32) NOT NULL,
+        user_id VARCHAR(32) NOT NULL,
+        moderator_id VARCHAR(32) NOT NULL,
+        reason TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS moderation_cases (
+        id SERIAL PRIMARY KEY,
+        guild_id VARCHAR(32) NOT NULL,
+        user_id VARCHAR(32) NOT NULL,
+        moderator_id VARCHAR(32) NOT NULL,
+        action VARCHAR(50) NOT NULL,
+        reason TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS guild_config (
+        guild_id VARCHAR(32) PRIMARY KEY,
+        log_channel_id VARCHAR(32),
+        mod_log_channel_id VARCHAR(32),
+        ticket_category_id VARCHAR(32),
+        ticket_staff_role_id VARCHAR(32),
+        autorole_id VARCHAR(32),
+        automod_enabled BOOLEAN DEFAULT FALSE,
+        antispam_enabled BOOLEAN DEFAULT FALSE,
+        antilink_enabled BOOLEAN DEFAULT FALSE,
+        antimention_enabled BOOLEAN DEFAULT FALSE,
+        autotimeout_enabled BOOLEAN DEFAULT FALSE,
+        security_enabled BOOLEAN DEFAULT FALSE,
+        verification_enabled BOOLEAN DEFAULT FALSE,
+        maintenance_enabled BOOLEAN DEFAULT FALSE,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS filtered_words (
+        id SERIAL PRIMARY KEY,
+        guild_id VARCHAR(32) NOT NULL,
+        word TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(guild_id, word)
+      );
+
+      CREATE TABLE IF NOT EXISTS invites (
+        id SERIAL PRIMARY KEY,
+        guild_id VARCHAR(32) NOT NULL,
+        user_id VARCHAR(32) NOT NULL,
+        uses INTEGER DEFAULT 0,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(guild_id, user_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS activity (
+        id SERIAL PRIMARY KEY,
+        guild_id VARCHAR(32) NOT NULL,
+        user_id VARCHAR(32) NOT NULL,
+        messages INTEGER DEFAULT 0,
+        voice_seconds BIGINT DEFAULT 0,
+        commands INTEGER DEFAULT 0,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(guild_id, user_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS tickets (
+        id SERIAL PRIMARY KEY,
+        guild_id VARCHAR(32) NOT NULL,
+        channel_id VARCHAR(32) UNIQUE NOT NULL,
+        user_id VARCHAR(32) NOT NULL,
+        claimed_by VARCHAR(32),
+        status VARCHAR(20) DEFAULT 'open',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        closed_at TIMESTAMP
+      );
+
+      console.log("✅ PostgreSQL tables initialized.");
+
+  } catch (error) {
+    console.error("❌ Database initialization failed:");
+    console.error(error.message);
+  }
+}
+
+// Database helper
+async function dbQuery(text, params = []) {
+  try {
+    return await pool.query(text, params);
+  } catch (error) {
+    console.error("❌ Database query failed:");
+    console.error(error.message);
+    throw error;
+  }
+}
+
+// Start database
+testDatabase();
+initializeDatabase();
+
+// Make database available globally
+global.db = pool;
+global.dbQuery = dbQuery;
+
+console.log("✅ Part 14 loaded — PostgreSQL database system active.");
