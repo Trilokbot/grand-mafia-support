@@ -1,0 +1,17 @@
+{
+  "name": "discord-full-ticket-bot",
+  "version": "1.0.0",
+  "description": "Full Discord ticket system with DM ticket creation, PostgreSQL, transcripts, claims, logs and cleanup.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.22.1",
+    "dotenv": "^17.2.1",
+    "pg": "^8.16.3"
+  }
+}
