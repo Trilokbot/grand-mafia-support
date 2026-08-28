@@ -1,7 +1,6 @@
 {
   "name": "trilok-discord-support-bot",
   "version": "3.0.0",
-  "description": "Discord DM Ticket, AutoMod, Security and Announcement Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -13,4 +12,3 @@
     "discord.js": "14.27.0"
   }
 }
-
