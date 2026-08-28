@@ -1,4 +1,32 @@
+// ======================================================
+// TRILOK DISCORD BOT
+// DM TICKETS + AUTOMOD + SECURITY + ANNOUNCEMENTS
+// RENDER FREE WEB SERVICE VERSION
+// ======================================================
+
 const http = require("http");
+
+// ======================================================
+// RENDER PORT SERVER
+// ======================================================
+
+const PORT = Number(process.env.PORT) || 10000;
+
+const webServer = http.createServer((req, res) => {
+  res.writeHead(200, {
+    "Content-Type": "text/plain; charset=utf-8"
+  });
+
+  res.end("TRILOK BOT ONLINE");
+});
+
+webServer.listen(PORT, "0.0.0.0", () => {
+  console.log(`WEB SERVER READY ON PORT ${PORT}`);
+});
+
+// ======================================================
+// DISCORD
+// ======================================================
 
 const {
   Client,
@@ -15,67 +43,42 @@ const {
   ButtonStyle
 } = require("discord.js");
 
-/* =========================
-   ENVIRONMENT
-========================= */
+// ======================================================
+// ENVIRONMENT VARIABLES
+// ======================================================
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 
+// ======================================================
+// YOUR SERVER SETTINGS
+// ======================================================
+
 const GUILD_ID = "1493700265499689154";
-const SUPPORT_ROLE_ID = "1542498406981959801";
-const SUPPORT_LOG_CHANNEL_ID = "1542500573000106024";
 
-const PORT = process.env.PORT || 10000;
+const SUPPORT_ROLE_ID =
+  "1542498406981959801";
 
-/* =========================
-   CHECK ENV
-========================= */
+const SUPPORT_LOG_CHANNEL_ID =
+  "1542500573000106024";
+
+// ======================================================
+// ENVIRONMENT CHECK
+// ======================================================
 
 if (!TOKEN) {
-  console.error("❌ DISCORD_TOKEN is missing.");
+  console.error("DISCORD_TOKEN is missing.");
   process.exit(1);
 }
 
 if (!CLIENT_ID) {
-  console.error("❌ CLIENT_ID is missing.");
+  console.error("CLIENT_ID is missing.");
   process.exit(1);
 }
 
-/* =========================
-   HTTP SERVER FOR RENDER
-========================= */
-
-const server = http.createServer((req, res) => {
-  if (req.url === "/health") {
-    res.writeHead(200, {
-      "Content-Type": "application/json"
-    });
-
-    res.end(
-      JSON.stringify({
-        status: "online",
-        bot: client?.user?.tag || "starting"
-      })
-    );
-
-    return;
-  }
-
-  res.writeHead(200, {
-    "Content-Type": "text/plain"
-  });
-
-  res.end("Trilok Bot is online.");
-});
-
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`🌐 Web server listening on port ${PORT}`);
-});
-
-/* =========================
-   DISCORD CLIENT
-========================= */
+// ======================================================
+// DISCORD CLIENT
+// ======================================================
 
 const client = new Client({
   intents: [
@@ -94,15 +97,15 @@ const client = new Client({
   ]
 });
 
-/* =========================
-   STORAGE
-========================= */
+// ======================================================
+// MEMORY STORAGE
+// ======================================================
 
 const tickets = new Map();
 
 let ticketCategoryId = null;
 
-const config = {
+const botConfig = {
   automod: true,
   security: true,
   spamLimit: 6,
@@ -113,9 +116,9 @@ const spamTracker = new Map();
 
 let recentJoins = [];
 
-/* =========================
-   STAFF CHECK
-========================= */
+// ======================================================
+// STAFF CHECK
+// ======================================================
 
 function isStaff(member) {
   if (!member) return false;
@@ -124,26 +127,39 @@ function isStaff(member) {
     member.permissions.has(
       PermissionFlagsBits.Administrator
     ) ||
-    member.roles.cache.has(SUPPORT_ROLE_ID)
+    member.roles.cache.has(
+      SUPPORT_ROLE_ID
+    )
   );
 }
 
-/* =========================
-   LOGGING
-========================= */
+// ======================================================
+// LOG SYSTEM
+// ======================================================
 
-async function sendLog(guild, title, description) {
+async function sendLog(
+  guild,
+  title,
+  description
+) {
   try {
-    const channel = await guild.channels.fetch(
-      SUPPORT_LOG_CHANNEL_ID
-    );
+    const channel =
+      await guild.channels.fetch(
+        SUPPORT_LOG_CHANNEL_ID
+      );
 
-    if (!channel || !channel.isTextBased()) return;
+    if (
+      !channel ||
+      !channel.isTextBased()
+    ) {
+      return;
+    }
 
-    const embed = new EmbedBuilder()
-      .setTitle(title)
-      .setDescription(description)
-      .setTimestamp();
+    const embed =
+      new EmbedBuilder()
+        .setTitle(title)
+        .setDescription(description)
+        .setTimestamp();
 
     await channel.send({
       embeds: [embed]
@@ -157,31 +173,42 @@ async function sendLog(guild, title, description) {
   }
 }
 
-/* =========================
-   SLASH COMMANDS
-========================= */
+// ======================================================
+// SLASH COMMANDS
+// ======================================================
 
-const commandData = [
+const commands = [
 
+  // TICKET
   new SlashCommandBuilder()
     .setName("ticket")
-    .setDescription("Create a support ticket."),
+    .setDescription(
+      "Create a support ticket."
+    ),
 
   new SlashCommandBuilder()
     .setName("ticketpanel")
-    .setDescription("Send the support ticket panel.")
+    .setDescription(
+      "Send the support ticket panel."
+    )
     .setDefaultMemberPermissions(
       PermissionFlagsBits.ManageGuild
     ),
 
   new SlashCommandBuilder()
     .setName("ticketsetup")
-    .setDescription("Configure ticket category.")
+    .setDescription(
+      "Configure the ticket category."
+    )
     .addChannelOption(option =>
       option
         .setName("category")
-        .setDescription("Ticket category")
-        .addChannelTypes(ChannelType.GuildCategory)
+        .setDescription(
+          "Ticket category"
+        )
+        .addChannelTypes(
+          ChannelType.GuildCategory
+        )
         .setRequired(true)
     )
     .setDefaultMemberPermissions(
@@ -190,70 +217,101 @@ const commandData = [
 
   new SlashCommandBuilder()
     .setName("close")
-    .setDescription("Close the current ticket."),
+    .setDescription(
+      "Close the current ticket."
+    ),
 
   new SlashCommandBuilder()
     .setName("claim")
-    .setDescription("Claim the current ticket."),
+    .setDescription(
+      "Claim the current ticket."
+    ),
 
   new SlashCommandBuilder()
     .setName("unclaim")
-    .setDescription("Unclaim the current ticket."),
+    .setDescription(
+      "Unclaim the current ticket."
+    ),
 
   new SlashCommandBuilder()
     .setName("add")
-    .setDescription("Add a user to the current ticket.")
+    .setDescription(
+      "Add a member to the ticket."
+    )
     .addUserOption(option =>
       option
         .setName("user")
-        .setDescription("User")
+        .setDescription(
+          "Member to add"
+        )
         .setRequired(true)
     ),
 
   new SlashCommandBuilder()
     .setName("remove")
-    .setDescription("Remove a user from the current ticket.")
+    .setDescription(
+      "Remove a member from the ticket."
+    )
     .addUserOption(option =>
       option
         .setName("user")
-        .setDescription("User")
+        .setDescription(
+          "Member to remove"
+        )
         .setRequired(true)
     ),
 
   new SlashCommandBuilder()
     .setName("transcript")
-    .setDescription("Create a ticket transcript."),
+    .setDescription(
+      "Create a ticket transcript."
+    ),
 
   new SlashCommandBuilder()
     .setName("ticketstats")
-    .setDescription("Show ticket statistics."),
+    .setDescription(
+      "Show ticket statistics."
+    ),
 
+  // AUTOMOD
   new SlashCommandBuilder()
     .setName("automod")
-    .setDescription("AutoMod controls.")
+    .setDescription(
+      "AutoMod controls."
+    )
     .addSubcommand(sub =>
       sub
         .setName("enable")
-        .setDescription("Enable AutoMod.")
+        .setDescription(
+          "Enable AutoMod."
+        )
     )
     .addSubcommand(sub =>
       sub
         .setName("disable")
-        .setDescription("Disable AutoMod.")
+        .setDescription(
+          "Disable AutoMod."
+        )
     )
     .addSubcommand(sub =>
       sub
         .setName("status")
-        .setDescription("Show AutoMod status.")
+        .setDescription(
+          "Show AutoMod status."
+        )
     )
     .addSubcommand(sub =>
       sub
         .setName("config")
-        .setDescription("Configure AutoMod.")
+        .setDescription(
+          "Configure AutoMod."
+        )
         .addIntegerOption(option =>
           option
             .setName("spam_limit")
-            .setDescription("Messages allowed in 5 seconds")
+            .setDescription(
+              "Messages allowed in 5 seconds"
+            )
             .setMinValue(3)
             .setMaxValue(20)
             .setRequired(false)
@@ -261,90 +319,128 @@ const commandData = [
         .addIntegerOption(option =>
           option
             .setName("timeout")
-            .setDescription("Timeout in seconds")
+            .setDescription(
+              "Timeout duration in seconds"
+            )
             .setMinValue(10)
             .setMaxValue(604800)
             .setRequired(false)
         )
     ),
 
+  // SECURITY
   new SlashCommandBuilder()
     .setName("security")
-    .setDescription("Security system.")
+    .setDescription(
+      "Security controls."
+    )
     .addSubcommand(sub =>
       sub
         .setName("enable")
-        .setDescription("Enable security.")
+        .setDescription(
+          "Enable security."
+        )
     )
     .addSubcommand(sub =>
       sub
         .setName("disable")
-        .setDescription("Disable security.")
+        .setDescription(
+          "Disable security."
+        )
     )
     .addSubcommand(sub =>
       sub
         .setName("status")
-        .setDescription("Show security status.")
+        .setDescription(
+          "Show security status."
+        )
     ),
 
+  // ANNOUNCEMENT
   new SlashCommandBuilder()
     .setName("announce")
-    .setDescription("Announcement system.")
+    .setDescription(
+      "Announcement system."
+    )
     .addSubcommand(sub =>
       sub
         .setName("send")
-        .setDescription("Send announcement.")
+        .setDescription(
+          "Send an announcement."
+        )
         .addChannelOption(option =>
           option
             .setName("channel")
-            .setDescription("Announcement channel")
-            .addChannelTypes(ChannelType.GuildText)
+            .setDescription(
+              "Announcement channel"
+            )
+            .addChannelTypes(
+              ChannelType.GuildText
+            )
             .setRequired(true)
         )
         .addStringOption(option =>
           option
             .setName("message")
-            .setDescription("Announcement message")
+            .setDescription(
+              "Announcement message"
+            )
             .setRequired(true)
         )
     )
     .addSubcommand(sub =>
       sub
         .setName("embed")
-        .setDescription("Send embed announcement.")
+        .setDescription(
+          "Send an embed announcement."
+        )
         .addChannelOption(option =>
           option
             .setName("channel")
-            .setDescription("Announcement channel")
-            .addChannelTypes(ChannelType.GuildText)
+            .setDescription(
+              "Announcement channel"
+            )
+            .addChannelTypes(
+              ChannelType.GuildText
+            )
             .setRequired(true)
         )
         .addStringOption(option =>
           option
             .setName("title")
-            .setDescription("Announcement title")
+            .setDescription(
+              "Announcement title"
+            )
             .setRequired(true)
         )
         .addStringOption(option =>
           option
             .setName("message")
-            .setDescription("Announcement message")
+            .setDescription(
+              "Announcement message"
+            )
             .setRequired(true)
         )
     )
 
-].map(command => command.toJSON());
+].map(command =>
+  command.toJSON()
+);
 
-/* =========================
-   REGISTER COMMANDS
-========================= */
+// ======================================================
+// REGISTER COMMANDS
+// ======================================================
 
 async function registerCommands() {
-  const rest = new REST({
-    version: "10"
-  }).setToken(TOKEN);
 
-  console.log("🔄 Registering slash commands...");
+  const rest =
+    new REST({
+      version: "10"
+    }).setToken(TOKEN);
+
+  console.log(
+    "Registering slash commands..."
+  );
 
   await rest.put(
     Routes.applicationGuildCommands(
@@ -352,67 +448,69 @@ async function registerCommands() {
       GUILD_ID
     ),
     {
-      body: commandData
+      body: commands
     }
   );
 
-  console.log("✅ Slash commands registered.");
+  console.log(
+    "Slash commands registered."
+  );
 }
 
-/* =========================
-   READY
-========================= */
+// ======================================================
+// BOT READY
+// ======================================================
 
-client.once("clientReady", async () => {
-  console.log(
-    `✅ Logged in as ${client.user.tag}`
-  );
+client.once(
+  "clientReady",
+  async () => {
 
-  try {
-    await registerCommands();
-  } catch (error) {
-    console.error(
-      "❌ Command registration failed:",
-      error
+    console.log(
+      `Logged in as ${client.user.tag}`
+    );
+
+    try {
+
+      await registerCommands();
+
+    } catch (error) {
+
+      console.error(
+        "Command registration error:",
+        error
+      );
+    }
+
+    console.log(
+      "DM Ticket + AutoMod + Security + Announcement Bot is online."
     );
   }
+);
 
-  console.log(
-    "================================"
-  );
-
-  console.log("TRILOK BOT ONLINE");
-  console.log("DM TICKETS: ON");
-  console.log("AUTOMOD: ON");
-  console.log("SECURITY: ON");
-  console.log("ANNOUNCEMENTS: ON");
-
-  console.log(
-    "================================"
-  );
-});
-
-/* =========================
-   CREATE TICKET
-========================= */
+// ======================================================
+// CREATE TICKET
+// ======================================================
 
 async function createTicket(user) {
 
   const guild =
-    await client.guilds.fetch(GUILD_ID);
+    await client.guilds.fetch(
+      GUILD_ID
+    );
 
-  const existing =
-    tickets.get(user.id);
+  // Already has ticket
+  if (tickets.has(user.id)) {
 
-  if (existing) {
+    const oldTicket =
+      tickets.get(user.id);
 
-    const existingChannel =
+    const oldChannel =
       await guild.channels
-        .fetch(existing.channelId)
+        .fetch(oldTicket.channelId)
         .catch(() => null);
 
-    if (existingChannel) {
-      return existingChannel;
+    if (oldChannel) {
+      return oldChannel;
     }
 
     tickets.delete(user.id);
@@ -421,6 +519,7 @@ async function createTicket(user) {
   let category = null;
 
   if (ticketCategoryId) {
+
     category =
       await guild.channels
         .fetch(ticketCategoryId)
@@ -437,6 +536,7 @@ async function createTicket(user) {
   const channel =
     await guild.channels.create({
       name: `ticket-${username}`,
+
       type: ChannelType.GuildText,
 
       parent:
@@ -446,8 +546,10 @@ async function createTicket(user) {
           : undefined,
 
       permissionOverwrites: [
+
         {
           id: guild.roles.everyone.id,
+
           deny: [
             PermissionFlagsBits.ViewChannel
           ]
@@ -455,48 +557,68 @@ async function createTicket(user) {
 
         {
           id: SUPPORT_ROLE_ID,
+
           allow: [
             PermissionFlagsBits.ViewChannel,
             PermissionFlagsBits.SendMessages,
             PermissionFlagsBits.ReadMessageHistory
           ]
         }
+
       ]
     });
 
-  tickets.set(user.id, {
-    channelId: channel.id,
-    claimedBy: null,
-    createdAt: Date.now()
-  });
+  tickets.set(
+    user.id,
+    {
+      channelId: channel.id,
+      claimedBy: null,
+      createdAt: Date.now()
+    }
+  );
 
   const embed =
     new EmbedBuilder()
-      .setTitle("🎫 Support Ticket")
+      .setTitle(
+        "🎫 Support Ticket"
+      )
       .setDescription(
         `User: <@${user.id}>\n\n` +
-        "This is a DM support ticket.\n" +
-        "Support staff can reply in this channel."
+        "A new support ticket has been created.\n" +
+        "Staff can reply to the user from this channel."
       )
       .setTimestamp();
 
   const row =
     new ActionRowBuilder()
       .addComponents(
+
         new ButtonBuilder()
-          .setCustomId("close_ticket")
-          .setLabel("Close Ticket")
+          .setCustomId(
+            "close_ticket"
+          )
+          .setLabel(
+            "Close Ticket"
+          )
           .setEmoji("🔒")
           .setStyle(
             ButtonStyle.Danger
           )
+
       );
 
   await channel.send({
+
     content:
       `<@&${SUPPORT_ROLE_ID}>`,
-    embeds: [embed],
-    components: [row]
+
+    embeds: [
+      embed
+    ],
+
+    components: [
+      row
+    ]
   });
 
   await user.send(
@@ -512,9 +634,9 @@ async function createTicket(user) {
   return channel;
 }
 
-/* =========================
-   DM -> TICKET
-========================= */
+// ======================================================
+// MESSAGE HANDLER
+// ======================================================
 
 client.on(
   "messageCreate",
@@ -524,6 +646,10 @@ client.on(
       return;
 
     try {
+
+      // ==================================================
+      // DM FROM USER
+      // ==================================================
 
       if (!message.guild) {
 
@@ -549,7 +675,9 @@ client.on(
 
         const channel =
           await client.channels
-            .fetch(ticket.channelId)
+            .fetch(
+              ticket.channelId
+            )
             .catch(() => null);
 
         if (!channel) {
@@ -579,21 +707,27 @@ client.on(
         return;
       }
 
-      await runAutoMod(message);
+      // ==================================================
+      // SERVER AUTOMOD
+      // ==================================================
+
+      await runAutoMod(
+        message
+      );
 
     } catch (error) {
 
       console.error(
-        "Message error:",
+        "Message handler error:",
         error
       );
     }
   }
 );
 
-/* =========================
-   STAFF -> USER
-========================= */
+// ======================================================
+// STAFF MESSAGE -> USER DM
+// ======================================================
 
 client.on(
   "messageCreate",
@@ -602,7 +736,9 @@ client.on(
     if (
       message.author.bot ||
       !message.guild
-    ) return;
+    ) {
+      return;
+    }
 
     try {
 
@@ -617,23 +753,30 @@ client.on(
           ticket.channelId ===
           message.channel.id
         ) {
+
           userId = id;
           break;
         }
       }
 
-      if (!userId) return;
+      if (!userId)
+        return;
 
       if (
-        !isStaff(message.member)
-      ) return;
+        !isStaff(
+          message.member
+        )
+      ) {
+        return;
+      }
 
       const user =
         await client.users
           .fetch(userId)
           .catch(() => null);
 
-      if (!user) return;
+      if (!user)
+        return;
 
       await user.send(
         `💬 **Support — ${message.author.tag}:**\n` +
@@ -650,16 +793,18 @@ client.on(
   }
 );
 
-/* =========================
-   AUTOMOD
-========================= */
+// ======================================================
+// AUTOMOD
+// ======================================================
 
 async function runAutoMod(message) {
 
   if (
     !message.guild ||
-    !config.automod
-  ) return;
+    !botConfig.automod
+  ) {
+    return;
+  }
 
   if (
     message.member?.permissions.has(
@@ -668,12 +813,16 @@ async function runAutoMod(message) {
     message.member?.roles.cache.has(
       SUPPORT_ROLE_ID
     )
-  ) return;
+  ) {
+    return;
+  }
 
   const content =
     message.content || "";
 
-  /* INVITE PROTECTION */
+  // ==================================================
+  // DISCORD INVITES
+  // ==================================================
 
   if (
     /discord\.gg\/|discord\.com\/invite\//i
@@ -691,7 +840,9 @@ async function runAutoMod(message) {
     return;
   }
 
-  /* MASS MENTION */
+  // ==================================================
+  // MASS MENTION
+  // ==================================================
 
   if (
     message.mentions.everyone ||
@@ -710,17 +861,20 @@ async function runAutoMod(message) {
     return;
   }
 
-  /* SPAM */
+  // ==================================================
+  // SPAM
+  // ==================================================
 
-  const now = Date.now();
+  const now =
+    Date.now();
 
-  const old =
+  const previous =
     spamTracker.get(
       message.author.id
     ) || [];
 
   const recent =
-    old.filter(
+    previous.filter(
       time =>
         now - time < 5000
     );
@@ -734,7 +888,7 @@ async function runAutoMod(message) {
 
   if (
     recent.length >=
-    config.spamLimit
+    botConfig.spamLimit
   ) {
 
     spamTracker.set(
@@ -752,14 +906,26 @@ async function runAutoMod(message) {
   }
 }
 
-async function punish(member, reason) {
+// ======================================================
+// AUTOMOD PUNISH
+// ======================================================
 
-  if (!member) return;
+async function punish(
+  member,
+  reason
+) {
 
-  if (member.moderatable) {
+  if (!member)
+    return;
+
+  if (
+    member.moderatable
+  ) {
 
     await member.timeout(
-      config.timeoutSeconds * 1000,
+      botConfig.timeoutSeconds *
+      1000,
+
       `AutoMod: ${reason}`
     ).catch(() => {});
   }
@@ -767,15 +933,16 @@ async function punish(member, reason) {
   await sendLog(
     member.guild,
     "🛡️ AutoMod Action",
+
     `User: <@${member.id}>\n` +
     `Reason: ${reason}\n` +
-    `Timeout: ${config.timeoutSeconds}s`
+    `Timeout: ${botConfig.timeoutSeconds}s`
   );
 }
 
-/* =========================
-   SECURITY / ANTI RAID
-========================= */
+// ======================================================
+// SECURITY / ANTI RAID
+// ======================================================
 
 client.on(
   "guildMemberAdd",
@@ -784,12 +951,18 @@ client.on(
     if (
       member.guild.id !==
       GUILD_ID
-    ) return;
-
-    if (!config.security)
+    ) {
       return;
+    }
 
-    const now = Date.now();
+    if (
+      !botConfig.security
+    ) {
+      return;
+    }
+
+    const now =
+      Date.now();
 
     recentJoins =
       recentJoins.filter(
@@ -797,15 +970,20 @@ client.on(
           now - time < 10000
       );
 
-    recentJoins.push(now);
+    recentJoins.push(
+      now
+    );
 
     if (
-      recentJoins.length >= 10
+      recentJoins.length >=
+      10
     ) {
 
       await sendLog(
         member.guild,
+
         "🚨 SECURITY ALERT",
+
         "Possible raid detected: 10 or more members joined within 10 seconds."
       );
 
@@ -814,9 +992,9 @@ client.on(
   }
 );
 
-/* =========================
-   INTERACTIONS
-========================= */
+// ======================================================
+// INTERACTIONS
+// ======================================================
 
 client.on(
   "interactionCreate",
@@ -824,7 +1002,9 @@ client.on(
 
     try {
 
-      /* BUTTON */
+      // ==================================================
+      // CLOSE BUTTON
+      // ==================================================
 
       if (
         interaction.isButton()
@@ -833,7 +1013,9 @@ client.on(
         if (
           interaction.customId !==
           "close_ticket"
-        ) return;
+        ) {
+          return;
+        }
 
         if (
           !isStaff(
@@ -861,6 +1043,7 @@ client.on(
             ticket.channelId ===
             interaction.channel.id
           ) {
+
             userId = id;
             break;
           }
@@ -870,14 +1053,16 @@ client.on(
 
           await interaction.reply({
             content:
-              "❌ This isn't an active ticket.",
+              "❌ This is not an active ticket.",
             ephemeral: true
           });
 
           return;
         }
 
-        tickets.delete(userId);
+        tickets.delete(
+          userId
+        );
 
         const user =
           await client.users
@@ -897,8 +1082,11 @@ client.on(
 
         await sendLog(
           interaction.guild,
+
           "🎫 Ticket Closed",
-          `User: <@${userId}>\nClosed by: ${interaction.user}`
+
+          `User: <@${userId}>\n` +
+          `Closed by: ${interaction.user}`
         );
 
         setTimeout(() => {
@@ -912,11 +1100,19 @@ client.on(
         return;
       }
 
+      // ==================================================
+      // SLASH COMMANDS
+      // ==================================================
+
       if (
         !interaction.isChatInputCommand()
-      ) return;
+      ) {
+        return;
+      }
 
-      /* TICKET */
+      // ==================================================
+      // /ticket
+      // ==================================================
 
       if (
         interaction.commandName ===
@@ -937,7 +1133,9 @@ client.on(
         return;
       }
 
-      /* TICKET PANEL */
+      // ==================================================
+      // /ticketpanel
+      // ==================================================
 
       if (
         interaction.commandName ===
@@ -966,13 +1164,15 @@ client.on(
             )
             .setDescription(
               "Need help?\n\n" +
-              "Send a **DM to this bot** to create a private support ticket.\n\n" +
-              "A support team member will assist you."
+              "Send a DM to this bot to create a private support ticket.\n\n" +
+              "Our support team will assist you."
             )
             .setTimestamp();
 
         await interaction.channel.send({
-          embeds: [embed]
+          embeds: [
+            embed
+          ]
         });
 
         await interaction.reply({
@@ -984,7 +1184,9 @@ client.on(
         return;
       }
 
-      /* SETUP */
+      // ==================================================
+      // /ticketsetup
+      // ==================================================
 
       if (
         interaction.commandName ===
@@ -1021,7 +1223,9 @@ client.on(
         return;
       }
 
-      /* STATS */
+      // ==================================================
+      // /ticketstats
+      // ==================================================
 
       if (
         interaction.commandName ===
@@ -1047,12 +1251,12 @@ client.on(
           tickets.size;
 
         const claimed =
-          [...tickets.values()]
-            .filter(
-              ticket =>
-                ticket.claimedBy
-            )
-            .length;
+          [
+            ...tickets.values()
+          ].filter(
+            ticket =>
+              ticket.claimedBy
+          ).length;
 
         const embed =
           new EmbedBuilder()
@@ -1060,18 +1264,21 @@ client.on(
               "🎫 Ticket Statistics"
             )
             .addFields(
+
               {
-                name: "Open",
+                name: "Open Tickets",
                 value:
                   String(open),
                 inline: true
               },
+
               {
                 name: "Claimed",
                 value:
                   String(claimed),
                 inline: true
               },
+
               {
                 name: "Unclaimed",
                 value:
@@ -1080,17 +1287,22 @@ client.on(
                   ),
                 inline: true
               }
+
             )
             .setTimestamp();
 
         await interaction.reply({
-          embeds: [embed]
+          embeds: [
+            embed
+          ]
         });
 
         return;
       }
 
-      /* TICKET COMMANDS */
+      // ==================================================
+      // TICKET MANAGEMENT
+      // ==================================================
 
       if (
         [
@@ -1131,6 +1343,7 @@ client.on(
             ticket.channelId ===
             interaction.channel.id
           ) {
+
             userId = id;
             break;
           }
@@ -1140,7 +1353,7 @@ client.on(
 
           await interaction.reply({
             content:
-              "❌ This isn't an active ticket.",
+              "❌ This is not an active ticket.",
             ephemeral: true
           });
 
@@ -1148,10 +1361,11 @@ client.on(
         }
 
         const ticket =
-          tickets.get(userId);
+          tickets.get(
+            userId
+          );
 
-        /* CLAIM */
-
+        // CLAIM
         if (
           interaction.commandName ===
           "claim"
@@ -1167,8 +1381,7 @@ client.on(
           return;
         }
 
-        /* UNCLAIM */
-
+        // UNCLAIM
         if (
           interaction.commandName ===
           "unclaim"
@@ -1184,8 +1397,7 @@ client.on(
           return;
         }
 
-        /* ADD */
-
+        // ADD
         if (
           interaction.commandName ===
           "add"
@@ -1213,8 +1425,7 @@ client.on(
           return;
         }
 
-        /* REMOVE */
-
+        // REMOVE
         if (
           interaction.commandName ===
           "remove"
@@ -1227,7 +1438,9 @@ client.on(
 
           await interaction.channel
             .permissionOverwrites
-            .delete(user.id)
+            .delete(
+              user.id
+            )
             .catch(() => {});
 
           await interaction.reply(
@@ -1237,8 +1450,7 @@ client.on(
           return;
         }
 
-        /* TRANSCRIPT */
-
+        // TRANSCRIPT
         if (
           interaction.commandName ===
           "transcript"
@@ -1251,7 +1463,9 @@ client.on(
               });
 
           const transcript =
-            [...messages.values()]
+            [
+              ...messages.values()
+            ]
               .reverse()
               .map(
                 message =>
@@ -1273,14 +1487,15 @@ client.on(
           return;
         }
 
-        /* CLOSE */
-
+        // CLOSE
         if (
           interaction.commandName ===
           "close"
         ) {
 
-          tickets.delete(userId);
+          tickets.delete(
+            userId
+          );
 
           const user =
             await client.users
@@ -1300,8 +1515,11 @@ client.on(
 
           await sendLog(
             interaction.guild,
+
             "🎫 Ticket Closed",
-            `User: <@${userId}>\nClosed by: ${interaction.user}`
+
+            `User: <@${userId}>\n` +
+            `Closed by: ${interaction.user}`
           );
 
           setTimeout(() => {
@@ -1316,7 +1534,9 @@ client.on(
         }
       }
 
-      /* AUTOMOD */
+      // ==================================================
+      // AUTOMOD
+      // ==================================================
 
       if (
         interaction.commandName ===
@@ -1339,11 +1559,14 @@ client.on(
         }
 
         const sub =
-          interaction.options.getSubcommand();
+          interaction.options
+            .getSubcommand();
 
-        if (sub === "enable") {
+        if (
+          sub === "enable"
+        ) {
 
-          config.automod =
+          botConfig.automod =
             true;
 
           await interaction.reply(
@@ -1353,9 +1576,11 @@ client.on(
           return;
         }
 
-        if (sub === "disable") {
+        if (
+          sub === "disable"
+        ) {
 
-          config.automod =
+          botConfig.automod =
             false;
 
           await interaction.reply(
@@ -1365,20 +1590,26 @@ client.on(
           return;
         }
 
-        if (sub === "status") {
+        if (
+          sub === "status"
+        ) {
 
           await interaction.reply(
             `🛡️ AutoMod: ${
-              config.automod
+              botConfig.automod
                 ? "ON"
                 : "OFF"
-            }\nSpam limit: ${config.spamLimit}\nTimeout: ${config.timeoutSeconds}s`
+            }\n` +
+            `Spam limit: ${botConfig.spamLimit}\n` +
+            `Timeout: ${botConfig.timeoutSeconds}s`
           );
 
           return;
         }
 
-        if (sub === "config") {
+        if (
+          sub === "config"
+        ) {
 
           const spam =
             interaction.options
@@ -1392,23 +1623,31 @@ client.on(
                 "timeout"
               );
 
-          if (spam !== null)
-            config.spamLimit =
+          if (
+            spam !== null
+          ) {
+            botConfig.spamLimit =
               spam;
+          }
 
-          if (timeout !== null)
-            config.timeoutSeconds =
+          if (
+            timeout !== null
+          ) {
+            botConfig.timeoutSeconds =
               timeout;
+          }
 
           await interaction.reply(
-            `✅ AutoMod configured.\nSpam limit: ${config.spamLimit}\nTimeout: ${config.timeoutSeconds}s`
+            `✅ AutoMod configured.\nSpam limit: ${botConfig.spamLimit}\nTimeout: ${botConfig.timeoutSeconds}s`
           );
 
           return;
         }
       }
 
-      /* SECURITY */
+      // ==================================================
+      // SECURITY
+      // ==================================================
 
       if (
         interaction.commandName ===
@@ -1431,11 +1670,14 @@ client.on(
         }
 
         const sub =
-          interaction.options.getSubcommand();
+          interaction.options
+            .getSubcommand();
 
-        if (sub === "enable") {
+        if (
+          sub === "enable"
+        ) {
 
-          config.security =
+          botConfig.security =
             true;
 
           await interaction.reply(
@@ -1445,9 +1687,11 @@ client.on(
           return;
         }
 
-        if (sub === "disable") {
+        if (
+          sub === "disable"
+        ) {
 
-          config.security =
+          botConfig.security =
             false;
 
           await interaction.reply(
@@ -1459,7 +1703,7 @@ client.on(
 
         await interaction.reply(
           `🔐 Security: ${
-            config.security
+            botConfig.security
               ? "ON"
               : "OFF"
           }\nAnti-raid: ON\nAudit monitoring: ON`
@@ -1468,7 +1712,9 @@ client.on(
         return;
       }
 
-      /* ANNOUNCEMENT */
+      // ==================================================
+      // ANNOUNCEMENTS
+      // ==================================================
 
       if (
         interaction.commandName ===
@@ -1491,14 +1737,19 @@ client.on(
         }
 
         const sub =
-          interaction.options.getSubcommand();
+          interaction.options
+            .getSubcommand();
 
         const channel =
-          interaction.options.getChannel(
-            "channel"
-          );
+          interaction.options
+            .getChannel(
+              "channel"
+            );
 
-        if (sub === "send") {
+        // NORMAL ANNOUNCEMENT
+        if (
+          sub === "send"
+        ) {
 
           const message =
             interaction.options
@@ -1507,7 +1758,8 @@ client.on(
               );
 
           await channel.send({
-            content: message
+            content:
+              message
           });
 
           await interaction.reply({
@@ -1518,14 +1770,20 @@ client.on(
 
           await sendLog(
             interaction.guild,
-            "📢 Announcement",
-            `Channel: ${channel}\nBy: ${interaction.user}`
+
+            "📢 Announcement Sent",
+
+            `Channel: ${channel}\n` +
+            `By: ${interaction.user}`
           );
 
           return;
         }
 
-        if (sub === "embed") {
+        // EMBED ANNOUNCEMENT
+        if (
+          sub === "embed"
+        ) {
 
           const title =
             interaction.options
@@ -1541,8 +1799,12 @@ client.on(
 
           const embed =
             new EmbedBuilder()
-              .setTitle(title)
-              .setDescription(message)
+              .setTitle(
+                title
+              )
+              .setDescription(
+                message
+              )
               .setTimestamp()
               .setFooter({
                 text:
@@ -1550,7 +1812,9 @@ client.on(
               });
 
           await channel.send({
-            embeds: [embed]
+            embeds: [
+              embed
+            ]
           });
 
           await interaction.reply({
@@ -1561,8 +1825,11 @@ client.on(
 
           await sendLog(
             interaction.guild,
-            "📢 Embed Announcement",
-            `Channel: ${channel}\nBy: ${interaction.user}`
+
+            "📢 Embed Announcement Sent",
+
+            `Channel: ${channel}\n` +
+            `By: ${interaction.user}`
           );
 
           return;
@@ -1591,9 +1858,9 @@ client.on(
   }
 );
 
-/* =========================
-   ERROR HANDLING
-========================= */
+// ======================================================
+// ERROR HANDLING
+// ======================================================
 
 process.on(
   "unhandledRejection",
@@ -1615,8 +1882,12 @@ process.on(
   }
 );
 
-/* =========================
-   LOGIN
-========================= */
+// ======================================================
+// LOGIN
+// ======================================================
+
+console.log(
+  "Starting Discord bot..."
+);
 
 client.login(TOKEN);
