@@ -1,17 +1,15 @@
 {
-  "name": "discord-full-ticket-bot",
+  "name": "dm-ticket-automod-security-bot",
   "version": "1.0.0",
-  "description": "Full Discord ticket system with DM ticket creation, PostgreSQL, transcripts, claims, logs and cleanup.",
+  "description": "Discord DM Ticket, AutoMod and Security Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=18.17.0"
   },
   "dependencies": {
-    "discord.js": "^14.22.1",
-    "dotenv": "^17.2.1",
-    "pg": "^8.16.3"
+    "discord.js": "^14.27.0"
   }
 }
